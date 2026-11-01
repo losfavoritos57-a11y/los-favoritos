@@ -293,7 +293,8 @@ begin
       equipo_a = ea, equipo_b = eb, goles_a = ga, goles_b = gb, goles = g, asist = s, mvp = mv
     where id = p_id returning id into nid;
     if nid is null then return jsonb_build_object('ok', false, 'error', 'partido'); end if;
-    -- notas a jugadores que ya no están en el partido dejan de valer
+    -- si alguien ya no figura en el partido, sus notas (dadas o recibidas) dejan de valer
+    delete from public.notas where match_id = nid and not (rater = any(ea || eb));
     update public.notas set notas = (select coalesce(jsonb_object_agg(key, value), '{}')
       from jsonb_each(notas) where key::uuid = any(ea || eb)) where match_id = nid;
   end if;
@@ -314,7 +315,7 @@ begin
   return jsonb_build_object('ok', true);
 end $$;
 
--- Poner notas: el jugador con su PIN. Solo a quienes jugaron ese partido y nunca a sí mismo.
+-- Poner notas: el jugador con su PIN, solo si jugó ese partido. Solo a quienes jugaron y nunca a sí mismo.
 create or replace function public.votar(a jsonb, p_match uuid, p_notas jsonb) returns jsonb
 language plpgsql security definer set search_path = public, extensions, pg_temp as $$
 declare au jsonb; yo uuid; m public.matches; limpio jsonb := '{}'; k text; v text; n int;
@@ -324,6 +325,7 @@ begin
   yo := (au->>'jugador')::uuid;
   select * into m from public.matches where id = p_match;
   if m is null then return jsonb_build_object('ok', false, 'error', 'partido'); end if;
+  if not (yo = any(m.equipo_a || m.equipo_b)) then return jsonb_build_object('ok', false, 'error', 'no_jugaste'); end if;
   for k, v in select key, value from jsonb_each_text(coalesce(p_notas, '{}')) loop
     begin n := v::int; exception when others then continue; end;
     if n between 1 and 10 and k::uuid <> yo and k::uuid = any(m.equipo_a || m.equipo_b) then

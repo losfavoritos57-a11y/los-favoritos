@@ -37,6 +37,7 @@ const ERRORES = {
   no_es_tuyo: 'Solo puedes editar tu propia ficha.',
   lleno: 'Ya hay 60 jugadores. No caben más.',
   partido: 'Ese partido ya no existe.',
+  no_jugaste: 'Solo ponen notas los que jugaron ese partido.',
   jugador: 'Ese jugador ya no existe.',
   sin_configurar: 'La app todavía no está configurada.',
 };
@@ -92,7 +93,7 @@ function toast(msg) { const t = $('#toast'); t.textContent = msg; t.hidden = fal
 /* ---------- estadísticas ---------- */
 const byFecha = (a, b) => (a.fecha || '').localeCompare(b.fecha || '') || (a.creado || 0) - (b.creado || 0);
 function jugo(mid, id) { const m = S.matches.find(x => x.id === mid); return !!m && ((m.equipoA || []).includes(id) || (m.equipoB || []).includes(id)); }
-const valida = (n, id) => n.rater !== id && jugo(n.matchId, id);
+const valida = (n, id) => n.rater !== id && jugo(n.matchId, id) && jugo(n.matchId, n.rater);
 function stats() {
   const st = {};
   const P = id => st[id] ??= { pj: 0, pg: 0, pe: 0, pp: 0, g: 0, a: 0, mvp: 0, ns: 0, nc: 0, gf: 0, gc: 0, forma: [] };
@@ -466,7 +467,8 @@ function matchSheet(id) {
   openSheet(`<h2 class="num">${a} – ${b}</h2><div class="small" style="opacity:.85">${esc(fmtFecha(m.fecha, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }))}${m.lugar ? ' · ' + esc(m.lugar) : ''}</div>`, `
    <div class="teams">${team('A', m.equipoA || [])}${team('B', m.equipoB || [])}</div>
    <p class="muted small" style="margin:0">El número amarillo es la nota promedio que le pusieron los demás en este partido.</p>
-   ${me ? `<div><div class="lbl2">Tus notas${mine ? ' (ya votaste, puedes cambiarlas)' : ''}</div><p class="muted small" style="margin:2px 0 4px">Del 1 al 10. Tu nota es una más en el promedio. A ti no te aparece: nadie se pone nota a sí mismo.</p>${rateRows || '<p class="muted">No hay a quién ponerle nota.</p>'}
+   ${me && !jugo(id, me.id) ? `<div class="note small">Solo ponen notas los que jugaron este partido.</div>`
+    : me ? `<div><div class="lbl2">Tus notas${mine ? ' (ya votaste, puedes cambiarlas)' : ''}</div><p class="muted small" style="margin:2px 0 4px">Del 1 al 10. Tu nota es una más en el promedio. A ti no te aparece: nadie se pone nota a sí mismo.</p>${rateRows || '<p class="muted">No hay a quién ponerle nota.</p>'}
      <div class="row" style="justify-content:flex-end;margin-top:8px"><button class="btn pri" data-act="save-rates">Guardar mis notas</button></div></div>`
     : `<div class="note cta small"><span>Para poner notas, primero elige tu jugador.</span><button class="btn pri" data-act="quien">Elegir</button></div>`}
    <div class="row"><button class="btn" data-act="edit-match" data-id="${esc(id)}">Editar partido</button></div>`, { type: 'mview', id });
