@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="es-CL">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Los Favoritos</title>
+<meta name="description" content="Tabla, goles y notas de la pichanga de Los Favoritos.">
+<meta name="theme-color" content="#1E6A3D">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Los Favoritos">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" type="image/png" href="/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@500;700;800&family=Figtree:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header class="band">
+  <div class="wrap">
+    <div class="brand">
+      <h1>Los Favoritos</h1>
+      <p>Tabla, goles y notas de la pichanga</p>
+    </div>
+    <div class="band-side">
+      <button class="cuenta" id="btn-cuenta" data-act="cuenta" hidden></button>
+      <div class="prox" id="prox-band" hidden></div>
+    </div>
+  </div>
+</header>
+<nav class="tabs" id="nav" aria-label="Secciones" hidden>
+  <div class="wrap" role="tablist" id="tabs">
+    <button class="tab" role="tab" data-v="ranking">Ranking</button>
+    <button class="tab" role="tab" data-v="partidos">Partidos</button>
+    <button class="tab" role="tab" data-v="plantel">Plantel</button>
+    <button class="tab" role="tab" data-v="proxima">Próxima</button>
+  </div>
+</nav>
+<main class="wrap" id="main"><div class="note empty"><h3>Cargando…</h3></div></main>
+<div class="sheet" id="sheet" hidden><div class="sheet-card" id="sheet-card" role="dialog" aria-modal="true"></div></div>
+<div class="toast" id="toast" role="status" hidden></div>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

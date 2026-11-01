@@ -1,0 +1,17 @@
+{
+  "name": "Los Favoritos",
+  "short_name": "Los Favoritos",
+  "description": "Tabla, goles y notas de la pichanga de Los Favoritos.",
+  "lang": "es-CL",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#1E6A3D",
+  "theme_color": "#1E6A3D",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

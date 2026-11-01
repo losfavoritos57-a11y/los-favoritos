@@ -1,0 +1,8 @@
+{
+  "name": "los-favoritos",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "icons": "node scripts/iconos.mjs"
+  }
+}
