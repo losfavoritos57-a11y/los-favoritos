@@ -384,7 +384,7 @@ exception when check_violation or invalid_text_representation or invalid_datetim
   return jsonb_build_object('ok', false, 'error', 'datos');
 end $$;
 
--- Para que Supabase no pause el proyecto por falta de uso (lo llama Vercel una vez al día).
+-- Para que Supabase no pause el proyecto por falta de uso (GitHub Actions lo llama una vez al día).
 create or replace function public.ping() returns int
 language sql security definer set search_path = public, pg_temp as $$ select 1 $$;
 

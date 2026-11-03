@@ -1,0 +1,20 @@
+# Netlify publica solo los archivos de la app (no el SQL ni los scripts).
+[build]
+  command = "rm -rf dist && mkdir dist && cp -r index.html app.js app.css config.js sw.js manifest.webmanifest icons dist/"
+  publish = "dist"
+
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/manifest.webmanifest"
+  [headers.values]
+    Content-Type = "application/manifest+json"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "no-referrer"
