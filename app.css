@@ -72,6 +72,9 @@ main.wrap{padding-block:20px calc(64px + env(safe-area-inset-bottom,0px));displa
 .note{border:1px dashed var(--line);border-radius:10px;padding:14px 16px;background:var(--surface-2);color:var(--muted)}
 .note strong{color:var(--ink)}
 .note.cta{border-style:solid;border-color:var(--amarilla);display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between}
+.note.cta.en-puerta{max-width:420px;margin:12px auto 0;width:100%}
+.note.cta .hint{display:block;margin-top:6px}
+#instalar-slot:empty{display:none}
 .empty{text-align:center;padding:36px 16px}
 .empty h3{font-size:24px;margin-bottom:6px;color:var(--ink)}
 

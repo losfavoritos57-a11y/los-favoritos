@@ -146,7 +146,7 @@ function vSetup() {
     <p class="hint">Anótalas en un lugar seguro. Si las pierdes, no se pueden recuperar desde la app.</p></form>`;
 }
 function vGrupo() {
-  return `<form class="puerta" id="f-grupo"><h2>Entrar</h2>
+  return `${bannerInstalar(true)}<form class="puerta" id="f-grupo"><h2>Entrar</h2>
     <p class="muted">Escribe la clave del grupo. Te la tiene que pasar alguien de Los Favoritos.</p>
     <div class="field"><label for="g-clave">Clave del grupo</label><input id="g-clave" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" required></div>
     <button class="btn pri full" type="submit">Entrar</button></form>`;
@@ -170,6 +170,7 @@ function render() {
   renderBand();
   let html = '';
   if (S.sinRed) html += `<div class="note">Sin conexión. Lo que ves puede no estar al día.</div>`;
+  html += bannerInstalar(false);
   if (!me && S.players.length) html += `<div class="note cta"><span><strong>¿Quién eres?</strong> Elige tu jugador para anotarte, cargar partidos y poner notas.</span><button class="btn pri" data-act="quien">Elegir</button></div>`;
   html += ({ ranking: vRanking, partidos: vPartidos, plantel: vPlantel, proxima: vProxima }[S.view])();
   const scrollTabla = $('.tbl-wrap')?.scrollLeft || 0; // que la actualización automática no mueva la tabla
@@ -312,8 +313,7 @@ async function entrarJugador() {
 
 function cuentaSheet() {
   const me = myPlayer();
-  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
-  const instalada = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+  const ios = esIOS(), instalada = yaInstalada();
   openSheet(`<h2>Tu cuenta</h2>`, `
     <div class="stack">
       <div><div class="lbl2">Jugador</div><p style="margin:4px 0 8px">${me ? `Entraste como <strong>${esc(me.apodo || me.nombre)}</strong>.` : 'Todavía no eliges tu jugador.'}</p>
@@ -552,7 +552,11 @@ document.addEventListener('click', async e => {
     case 'salir-jugador': delete SES.jugador; delete SES.pin; guardarSes(); closeSheet(); render(); quienEres(); break;
     case 'salir-admin': delete SES.admin; guardarSes(); closeSheet(); toast('Saliste del modo administrador'); render(); break;
     case 'salir-grupo': SES = {}; guardarSes(); closeSheet(); S.pantalla = 'grupo'; render(); break;
-    case 'instalar': if (instalarEvt) { instalarEvt.prompt(); instalarEvt = null; closeSheet(); } break;
+    case 'instalar': if (instalarEvt) {
+      const ev = instalarEvt; instalarEvt = null; bannerOculto = true; closeSheet(); refrescarBanner();
+      ev.prompt(); ev.userChoice.then(c => { if (c.outcome === 'accepted') recienInstalada = true; }).catch(() => {});
+    } break;
+    case 'no-instalar': sinBanner = true; try { localStorage.setItem('favoritos-sin-banner', '1'); } catch {} refrescarBanner(); break;
   }
 });
 document.addEventListener('input', e => { if (e.target.id === 'mf-ga' || e.target.id === 'mf-gb') { draft.tocado = true; draft.golesA = +$('#mf-ga').value || 0; draft.golesB = +$('#mf-gb').value || 0; } });
@@ -595,7 +599,29 @@ async function configurar() {
 
 /* ---------- instalación y arranque ---------- */
 let instalarEvt = null;
-window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); instalarEvt = e; });
+let sinBanner = false, bannerOculto = false, recienInstalada = false; // bannerOculto: solo hasta recargar
+try { sinBanner = localStorage.getItem('favoritos-sin-banner') === '1'; } catch {}
+const esIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (/macintosh/i.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+const yaInstalada = () => recienInstalada || matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+// Aviso visible para instalar, solo en celulares (en el computador queda en Tu cuenta).
+function bannerInstalar(puerta) {
+  const movil = esIOS() || /android/i.test(navigator.userAgent);
+  if (yaInstalada() || sinBanner || bannerOculto || !movil) return `<div id="instalar-slot"></div>`;
+  const como = instalarEvt ? 'Queda con su ícono, como cualquier app.'
+    : esIOS() ? 'En <strong>Safari</strong>, toca Compartir (el cuadrado con flecha) y elige <strong>Agregar a inicio</strong>.'
+    : 'En <strong>Chrome</strong>, abre el menú (tres puntos) y elige <strong>Instalar app</strong> o <strong>Agregar a pantalla principal</strong>.';
+  const ojo = instalarEvt ? '' : `<span class="hint">Si no ves esa opción, abre el link en ${esIOS() ? 'Safari' : 'Chrome'} (no dentro de WhatsApp).</span>`;
+  const antes = puerta && esIOS() ? ' Hazlo antes de entrar: la app instalada te pide la clave de nuevo.' : '';
+  return `<div id="instalar-slot" class="note cta instalar${puerta ? ' en-puerta' : ''}">
+    <span><strong>Instala Los Favoritos en tu celular.</strong> ${como}${antes} ${ojo}</span>
+    <span class="row">${instalarEvt ? '<button class="btn pri" data-act="instalar">Instalar app</button>' : ''}<button class="btn" data-act="no-instalar">Ahora no</button></span></div>`;
+}
+function refrescarBanner() {
+  const slot = $('#instalar-slot');
+  if (slot) slot.outerHTML = bannerInstalar(S.pantalla === 'grupo');
+}
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); instalarEvt = e; refrescarBanner(); });
+window.addEventListener('appinstalled', () => { instalarEvt = null; recienInstalada = true; refrescarBanner(); });
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 
 async function boot() {
