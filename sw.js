@@ -1,5 +1,5 @@
 // Guarda los archivos de la app para que abra rápido. Los datos siempre vienen de Supabase.
-const CACHE = 'favoritos-v6';
+const CACHE = 'favoritos-v7';
 const SHELL = ['/', '/app.css', '/app.js', '/config.js', '/manifest.webmanifest', '/icons/icon-192.png'];
 
 self.addEventListener('install', e => {
@@ -17,7 +17,7 @@ self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;
   e.respondWith(
-    fetch(e.request)
+    fetch(e.request, { cache: 'no-cache' })
       .then(r => {
         if (r.ok && r.status === 200) { const copy = r.clone(); caches.open(CACHE).then(c => c.put(e.request, copy)).catch(() => {}); }
         return r;

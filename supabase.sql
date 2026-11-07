@@ -14,6 +14,11 @@ create table if not exists public.config (
   grupo_hash text not null,
   admin_hash text not null
 );
+-- Si es false, solo el administrador puede crear jugadores nuevos.
+alter table public.config add column if not exists registro_abierto boolean not null default true;
+-- Clave del grupo anterior: quien entra con ella recibe "la clave cambió" sin sumar intentos fallidos
+-- (si no, los amigos con la clave vieja bloquearían la entrada de todos).
+alter table public.config add column if not exists grupo_hash_anterior text;
 
 create table if not exists public.players (
   id uuid primary key default gen_random_uuid(),
@@ -41,6 +46,8 @@ create table if not exists public.matches (
   creado_por uuid,
   creado timestamptz not null default now()
 );
+-- Partidos borrados quedan en la papelera (el administrador los puede recuperar).
+alter table public.matches add column if not exists borrado timestamptz;
 
 create table if not exists public.notas (
   match_id uuid not null references public.matches(id) on delete cascade,
@@ -124,6 +131,14 @@ declare c public.config; v text; pid uuid; es_admin boolean := false; h text;
 begin
   select * into c from public.config where id = 1;
   if c is null then return jsonb_build_object('ok', false, 'error', 'sin_configurar'); end if;
+  -- La clave anterior se prueba solo si la actual no coincide y la entrada no está bloqueada;
+  -- si no es ninguna de las dos, cuenta como intento fallido.
+  if c.grupo_hash_anterior is not null and coalesce(a->>'grupo', '') <> ''
+    and not exists (select 1 from public.intentos where clave = 'grupo' and bloqueado_hasta > now())
+    and crypt(a->>'grupo', c.grupo_hash) <> c.grupo_hash
+    and crypt(a->>'grupo', c.grupo_hash_anterior) = c.grupo_hash_anterior then
+    return jsonb_build_object('ok', false, 'error', 'clave_cambiada');
+  end if;
   v := priv.revisar('grupo', a->>'grupo', c.grupo_hash, 20, 10);
   if v <> 'ok' then return jsonb_build_object('ok', false, 'error', case when v = 'bloqueado' then 'bloqueado' else 'grupo' end); end if;
 
@@ -138,7 +153,9 @@ begin
     select pin_hash into h from public.players where id = pid;
     if h is null then return jsonb_build_object('ok', false, 'error', 'jugador'); end if;
     v := priv.revisar('p:' || pid, a->>'pin', h, 5, 15);
-    if v <> 'ok' then return jsonb_build_object('ok', false, 'error', case when v = 'bloqueado' then 'bloqueado' else 'pin' end); end if;
+    -- el administrador no queda sin herramientas si le bloquean el PIN de su jugador
+    if v <> 'ok' and es_admin then pid := null;
+    elsif v <> 'ok' then return jsonb_build_object('ok', false, 'error', case when v = 'bloqueado' then 'bloqueado' else 'pin' end); end if;
   end if;
 
   if p_necesita_jugador and pid is null and not es_admin then
@@ -178,35 +195,66 @@ create or replace function public.entrar(a jsonb) returns jsonb
 language plpgsql security definer set search_path = public, extensions, pg_temp as $$
 begin return priv.auth(a, false); end $$;
 
--- Todo lo que la app muestra.
+-- Todo lo que la app muestra. Las notas y la figura van resumidas (nunca quién votó qué):
+-- la nota de un jugador en un partido solo si lo calificaron al menos 3, y la figura solo si
+-- la votaron al menos 3 (con menos, quien votó podría restar el suyo y sacar el de otro).
+-- Si viene el jugador con su PIN, también van sus propios votos.
 create or replace function public.estado(a jsonb) returns jsonb
 language plpgsql security definer set search_path = public, extensions, pg_temp as $$
-declare au jsonb;
+declare au jsonb; yo uuid; err_jugador text; min_votos constant int := 3;
 begin
   au := priv.auth(jsonb_build_object('grupo', a->>'grupo'), false);
-  if not (au->>'ok')::boolean then return au; end if;
-  return jsonb_build_object('ok', true,
+  if not (au->>'ok')::boolean then
+    -- la versión vieja de la app no conoce 'clave_cambiada' (y no manda 'jugador')
+    if au->>'error' = 'clave_cambiada' and not (a ? 'jugador') then return jsonb_build_object('ok', false, 'error', 'grupo'); end if;
+    return au;
+  end if;
+  if coalesce(a->>'jugador', '') <> '' then
+    au := priv.auth(jsonb_build_object('grupo', a->>'grupo', 'jugador', a->>'jugador', 'pin', a->>'pin'), false);
+    if (au->>'ok')::boolean then yo := (au->>'jugador')::uuid; else err_jugador := au->>'error'; end if;
+  end if;
+  return jsonb_build_object('ok', true, 'errorJugador', err_jugador, 'minVotos', min_votos,
+    'registroAbierto', (select registro_abierto from public.config where id = 1),
+    'votantes', coalesce((select jsonb_object_agg(n.match_id, n.c) from (select match_id, count(*) c from public.notas
+      join public.matches m on m.id = match_id and m.borrado is null group by match_id) n), '{}'),
+    'notasRes', coalesce((select jsonb_agg(jsonb_build_object('matchId', x.match_id, 'id', x.k, 'suma', x.s, 'n', x.c))
+      from (select n.match_id, e.key k, sum(e.value::int) s, count(*) c
+        from public.notas n join public.matches m on m.id = n.match_id and m.borrado is null, jsonb_each_text(n.notas) e
+        group by n.match_id, e.key having count(*) >= min_votos) x), '[]'),
+    'figuraRes', coalesce((select jsonb_agg(jsonb_build_object('matchId', x.match_id, 'id', x.figura, 'votos', x.c))
+      from (select n.match_id, n.figura, count(*) c
+        from public.notas n join public.matches m on m.id = n.match_id and m.borrado is null
+        where n.figura is not null
+          and (select count(*) from public.notas z where z.match_id = n.match_id and z.figura is not null) >= min_votos
+        group by n.match_id, n.figura) x), '[]'),
+    'misVotos', coalesce((select jsonb_agg(jsonb_build_object('matchId', match_id, 'notas', notas, 'figura', figura))
+      from public.notas where yo is not null and rater = yo), '[]'),
     'players', coalesce((select jsonb_agg(jsonb_build_object('id', id, 'nombre', nombre, 'apodo', apodo,
         'posicion', posicion, 'posicion2', posicion2, 'numero', numero, 'pie', pie, 'creado', creado) order by creado)
       from public.players), '[]'),
     'matches', coalesce((select jsonb_agg(jsonb_build_object('id', id, 'fecha', fecha, 'lugar', lugar,
         'equipoA', to_jsonb(equipo_a), 'equipoB', to_jsonb(equipo_b), 'golesA', goles_a, 'golesB', goles_b,
         'goles', goles, 'asist', asist, 'mvp', mvp, 'creado', extract(epoch from creado) * 1000))
-      from public.matches), '[]'),
-    'notas', coalesce((select jsonb_agg(jsonb_build_object('matchId', match_id, 'rater', rater, 'notas', notas, 'figura', figura))
-      from public.notas), '[]'),
+      from public.matches where borrado is null), '[]'),
     'anotados', coalesce((select jsonb_agg(jsonb_build_object('id', player_id)) from public.anotados), '[]'),
     'proxima', (select jsonb_build_object('fecha', fecha, 'hora', hora, 'lugar', lugar, 'cupos', cupos)
       from public.proxima where id = 1));
 end $$;
 
--- Crear jugador: basta el PIN del grupo (así cada uno se anota solo).
+-- Crear jugador: basta la clave del grupo (así cada uno se anota solo),
+-- salvo que el administrador haya cerrado el registro.
 create or replace function public.crear_jugador(a jsonb, d jsonb, p_pin text) returns jsonb
 language plpgsql security definer set search_path = public, extensions, pg_temp as $$
 declare au jsonb; nid uuid;
 begin
-  au := priv.auth(jsonb_build_object('grupo', a->>'grupo'), false);
-  if not (au->>'ok')::boolean then return au; end if;
+  if (select registro_abierto from public.config where id = 1) is false then
+    au := priv.auth(jsonb_build_object('grupo', a->>'grupo', 'admin', a->>'admin'), false);
+    if not (au->>'ok')::boolean then return au; end if;
+    if not (au->>'admin')::boolean then return jsonb_build_object('ok', false, 'error', 'registro_cerrado'); end if;
+  else
+    au := priv.auth(jsonb_build_object('grupo', a->>'grupo'), false);
+    if not (au->>'ok')::boolean then return au; end if;
+  end if;
   if not priv.pin_valido(p_pin) then return jsonb_build_object('ok', false, 'error', 'pin_formato'); end if;
   if (select count(*) from public.players) >= 60 then return jsonb_build_object('ok', false, 'error', 'lleno'); end if;
   insert into public.players (nombre, apodo, posicion, posicion2, numero, pie, pin_hash)
@@ -251,8 +299,11 @@ begin
   au := priv.auth(a, true);
   if not (au->>'ok')::boolean then return au; end if;
   if not (au->>'admin')::boolean then return jsonb_build_object('ok', false, 'error', 'solo_admin'); end if;
-  if exists (select 1 from public.matches where p_id = any(equipo_a) or p_id = any(equipo_b)) then
+  if exists (select 1 from public.matches where borrado is null and (p_id = any(equipo_a) or p_id = any(equipo_b))) then
     return jsonb_build_object('ok', false, 'error', 'tiene_partidos');
+  end if;
+  if exists (select 1 from public.matches where p_id = any(equipo_a) or p_id = any(equipo_b)) then
+    return jsonb_build_object('ok', false, 'error', 'en_papelera');
   end if;
   delete from public.players where id = p_id;
   return jsonb_build_object('ok', true);
@@ -293,7 +344,7 @@ begin
   else
     update public.matches set fecha = (d->>'fecha')::date, lugar = trim(coalesce(d->>'lugar', '')),
       equipo_a = ea, equipo_b = eb, goles_a = ga, goles_b = gb, goles = g, asist = s, mvp = mv
-    where id = p_id returning id into nid;
+    where id = p_id and borrado is null returning id into nid;
     if nid is null then return jsonb_build_object('ok', false, 'error', 'partido'); end if;
     -- si alguien ya no figura en el partido, sus notas (dadas o recibidas) dejan de valer
     delete from public.notas where match_id = nid and not (rater = any(ea || eb));
@@ -308,14 +359,38 @@ exception when check_violation or invalid_text_representation or invalid_datetim
   return jsonb_build_object('ok', false, 'error', 'datos');
 end $$;
 
--- Borrar partido: cualquier jugador con su PIN (Diego lo decidió así).
+-- Borrar partido: cualquier jugador con su PIN (Diego lo decidió así). Va a la papelera.
 create or replace function public.borrar_partido(a jsonb, p_id uuid) returns jsonb
 language plpgsql security definer set search_path = public, extensions, pg_temp as $$
 declare au jsonb;
 begin
   au := priv.auth(a, true);
   if not (au->>'ok')::boolean then return au; end if;
-  delete from public.matches where id = p_id;
+  update public.matches set borrado = now() where id = p_id and borrado is null;
+  return jsonb_build_object('ok', true);
+end $$;
+
+-- Papelera: solo el administrador la ve y recupera partidos.
+create or replace function public.papelera(a jsonb) returns jsonb
+language plpgsql security definer set search_path = public, extensions, pg_temp as $$
+declare au jsonb;
+begin
+  au := priv.auth(a, true);
+  if not (au->>'ok')::boolean then return au; end if;
+  if not (au->>'admin')::boolean then return jsonb_build_object('ok', false, 'error', 'solo_admin'); end if;
+  return jsonb_build_object('ok', true, 'partidos', coalesce((select jsonb_agg(jsonb_build_object('id', id, 'fecha', fecha,
+    'lugar', lugar, 'golesA', goles_a, 'golesB', goles_b, 'borrado', borrado) order by borrado desc)
+    from public.matches where borrado is not null), '[]'));
+end $$;
+
+create or replace function public.restaurar_partido(a jsonb, p_id uuid) returns jsonb
+language plpgsql security definer set search_path = public, extensions, pg_temp as $$
+declare au jsonb;
+begin
+  au := priv.auth(a, true);
+  if not (au->>'ok')::boolean then return au; end if;
+  if not (au->>'admin')::boolean then return jsonb_build_object('ok', false, 'error', 'solo_admin'); end if;
+  update public.matches set borrado = null where id = p_id;
   return jsonb_build_object('ok', true);
 end $$;
 
@@ -328,7 +403,7 @@ begin
   au := priv.auth(jsonb_build_object('grupo', a->>'grupo', 'jugador', a->>'jugador', 'pin', a->>'pin'), true);
   if not (au->>'ok')::boolean then return au; end if;
   yo := (au->>'jugador')::uuid;
-  select * into m from public.matches where id = p_match;
+  select * into m from public.matches where id = p_match and borrado is null;
   if m is null then return jsonb_build_object('ok', false, 'error', 'partido'); end if;
   if not (yo = any(m.equipo_a || m.equipo_b)) then return jsonb_build_object('ok', false, 'error', 'no_jugaste'); end if;
   for k, v in select key, value from jsonb_each_text(coalesce(p_notas, '{}')) loop
@@ -390,6 +465,52 @@ exception when check_violation or invalid_text_representation or invalid_datetim
   return jsonb_build_object('ok', false, 'error', 'datos');
 end $$;
 
+-- Administrador: cambiar la clave del grupo y/o la de administrador ('' = no cambiar).
+create or replace function public.cambiar_claves(a jsonb, p_grupo text, p_admin text) returns jsonb
+language plpgsql security definer set search_path = public, extensions, pg_temp as $$
+declare au jsonb; g text := coalesce(p_grupo, ''); ad text := coalesce(p_admin, '');
+begin
+  au := priv.auth(a, true);
+  if not (au->>'ok')::boolean then return au; end if;
+  if not (au->>'admin')::boolean then return jsonb_build_object('ok', false, 'error', 'solo_admin'); end if;
+  if g <> '' and char_length(g) < 6 then return jsonb_build_object('ok', false, 'error', 'grupo_corto'); end if;
+  if ad <> '' and char_length(ad) < 6 then return jsonb_build_object('ok', false, 'error', 'admin_corto'); end if;
+  if (g <> '' and g = coalesce(nullif(ad, ''), a->>'admin')) or (ad <> '' and ad = coalesce(nullif(g, ''), a->>'grupo')) then
+    return jsonb_build_object('ok', false, 'error', 'iguales');
+  end if;
+  if g <> '' and g <> coalesce(a->>'grupo', '') then update public.config set grupo_hash_anterior = grupo_hash, grupo_hash = crypt(g, gen_salt('bf')) where id = 1; delete from public.intentos where clave = 'grupo'; end if;
+  if ad <> '' then update public.config set admin_hash = crypt(ad, gen_salt('bf')) where id = 1; delete from public.intentos where clave = 'admin'; end if;
+  return jsonb_build_object('ok', true);
+end $$;
+
+-- Administrador: abrir o cerrar el registro de jugadores nuevos.
+create or replace function public.registro(a jsonb, p_abierto boolean) returns jsonb
+language plpgsql security definer set search_path = public, extensions, pg_temp as $$
+declare au jsonb;
+begin
+  au := priv.auth(a, true);
+  if not (au->>'ok')::boolean then return au; end if;
+  if not (au->>'admin')::boolean then return jsonb_build_object('ok', false, 'error', 'solo_admin'); end if;
+  update public.config set registro_abierto = coalesce(p_abierto, true) where id = 1;
+  return jsonb_build_object('ok', true);
+end $$;
+
+-- Administrador: copia de todos los datos (sin PIN ni claves) para guardar aparte.
+create or replace function public.respaldo(a jsonb) returns jsonb
+language plpgsql security definer set search_path = public, extensions, pg_temp as $$
+declare au jsonb;
+begin
+  au := priv.auth(a, true);
+  if not (au->>'ok')::boolean then return au; end if;
+  if not (au->>'admin')::boolean then return jsonb_build_object('ok', false, 'error', 'solo_admin'); end if;
+  return jsonb_build_object('ok', true, 'version', 1, 'fecha', now(),
+    'players', coalesce((select jsonb_agg(to_jsonb(p) - 'pin_hash') from public.players p), '[]'),
+    'matches', coalesce((select jsonb_agg(to_jsonb(m)) from public.matches m), '[]'),
+    'notas', coalesce((select jsonb_agg(to_jsonb(n)) from public.notas n), '[]'),
+    'anotados', coalesce((select jsonb_agg(to_jsonb(x)) from public.anotados x), '[]'),
+    'proxima', (select to_jsonb(x) from public.proxima x where id = 1));
+end $$;
+
 -- Para que Supabase no pause el proyecto por falta de uso (GitHub Actions lo llama una vez al día).
 create or replace function public.ping() returns int
 language sql security definer set search_path = public, pg_temp as $$ select 1 $$;
@@ -399,9 +520,13 @@ revoke all on function public.configurar(text, text), public.configurado(), publ
   public.estado(jsonb), public.crear_jugador(jsonb, jsonb, text), public.editar_jugador(jsonb, uuid, jsonb, text),
   public.borrar_jugador(jsonb, uuid), public.guardar_partido(jsonb, uuid, jsonb), public.borrar_partido(jsonb, uuid),
   public.votar(jsonb, uuid, jsonb, uuid), public.anotar(jsonb, uuid, boolean), public.vaciar_anotados(jsonb),
-  public.guardar_proxima(jsonb, jsonb), public.ping() from public;
+  public.guardar_proxima(jsonb, jsonb), public.ping(),
+  public.papelera(jsonb), public.restaurar_partido(jsonb, uuid), public.cambiar_claves(jsonb, text, text),
+  public.registro(jsonb, boolean), public.respaldo(jsonb) from public;
 grant execute on function public.configurar(text, text), public.configurado(), public.entrar(jsonb),
   public.estado(jsonb), public.crear_jugador(jsonb, jsonb, text), public.editar_jugador(jsonb, uuid, jsonb, text),
   public.borrar_jugador(jsonb, uuid), public.guardar_partido(jsonb, uuid, jsonb), public.borrar_partido(jsonb, uuid),
   public.votar(jsonb, uuid, jsonb, uuid), public.anotar(jsonb, uuid, boolean), public.vaciar_anotados(jsonb),
-  public.guardar_proxima(jsonb, jsonb), public.ping() to anon;
+  public.guardar_proxima(jsonb, jsonb), public.ping(),
+  public.papelera(jsonb), public.restaurar_partido(jsonb, uuid), public.cambiar_claves(jsonb, text, text),
+  public.registro(jsonb, boolean), public.respaldo(jsonb) to anon;

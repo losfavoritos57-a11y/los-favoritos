@@ -3,7 +3,7 @@ import { CONFIG } from './config.js';
 const POS = { POR: 'Arquero', DEF: 'Defensa', MED: 'Volante', DEL: 'Delantero' };
 const TEAM = { A: 'Con peto', B: 'Sin peto' };
 const VISTAS = ['ranking', 'partidos', 'plantel', 'proxima'];
-const S = { players: [], matches: [], notas: [], anotados: [], proxima: null, cargado: false, sinRed: false,
+const S = { players: [], matches: [], notasRes: [], figuraRes: [], votantes: {}, misVotos: [], minVotos: 3, registroAbierto: true, anotados: [], proxima: null, cargado: false, sinRed: false,
   view: 'ranking', sort: 'pts', equipos: null, pantalla: 'cargando' };
 
 /* ---------- sesión (queda guardada solo en este celular) ---------- */
@@ -23,16 +23,22 @@ async function rpc(fn, args = {}) {
   return r.json();
 }
 const ERRORES = {
-  grupo: 'El PIN del grupo no es correcto.',
+  grupo: 'La clave del grupo no es correcta.',
+  clave_cambiada: 'La clave del grupo cambió. Pídele la nueva al administrador.',
+  registro_cerrado: 'El registro está cerrado. Pídele al administrador que te agregue.',
+  grupo_corto: 'La clave del grupo debe tener al menos 6 caracteres.',
+  admin_corto: 'La clave de administrador debe tener al menos 6 caracteres.',
+  iguales: 'Las dos claves tienen que ser distintas.',
   pin: 'Ese PIN no corresponde a ese jugador.',
-  admin: 'El PIN de administrador no es correcto.',
-  bloqueado: 'Demasiados intentos fallidos. Espera 15 minutos y vuelve a probar.',
+  admin: 'La clave de administrador no es correcta.',
+  bloqueado: 'Demasiados intentos fallidos. Espera unos minutos y vuelve a probar.',
   sin_jugador: 'Primero dinos quién eres.',
   pin_formato: 'El PIN tiene que ser de 4 números.',
   datos: 'Algún dato no es válido. Revísalo.',
   equipos: 'Marca al menos un jugador en cada equipo, sin repetir.',
   goles: 'Hay más goles de jugadores que goles en el marcador.',
   tiene_partidos: 'No se puede borrar: ya jugó partidos.',
+  en_papelera: 'No se puede borrar: aparece en un partido de la papelera.',
   solo_admin: 'Eso lo puede hacer solo el administrador.',
   no_es_tuyo: 'Solo puedes editar tu propia ficha.',
   lleno: 'Ya hay 60 jugadores. No caben más.',
@@ -43,13 +49,14 @@ const ERRORES = {
 };
 function manejarError(code) {
   toast(ERRORES[code] || 'Algo falló. Inténtalo de nuevo.');
-  if (code === 'grupo') { SES = {}; guardarSes(); S.pantalla = 'grupo'; closeSheet(); render(); }
+  if (code === 'grupo' || code === 'clave_cambiada') { SES = {}; guardarSes(); S.pantalla = 'grupo'; closeSheet(); render(); }
   else if (code === 'sin_configurar') { SES = {}; guardarSes(); S.pantalla = 'setup'; closeSheet(); render(); }
   else if (code === 'bloqueado') { if (S.pantalla !== 'app') { S.pantalla = 'bloqueado'; render(); } }
-  else if (code === 'pin' || code === 'jugador') { if (SES.jugador) { delete SES.jugador; delete SES.pin; guardarSes(); render(); } }
+  else if (code === 'pin' || code === 'jugador') { if (SES.jugador) { olvidarJugador(); render(); } }
   else if (code === 'admin') { delete SES.admin; guardarSes(); render(); }
   else if (code === 'sin_jugador') { quienEres(); }
 }
+function olvidarJugador() { delete SES.jugador; delete SES.pin; guardarSes(); S.misVotos = []; S.errorJugador = null; }
 // Ejecuta una acción que cambia datos. Devuelve la respuesta si salió bien, o null.
 async function accion(fn, args, okMsg) {
   let r;
@@ -63,13 +70,19 @@ async function accion(fn, args, okMsg) {
 async function refrescar() {
   if (!SES.grupo) return;
   let r;
-  try { r = await rpc('estado', { a: { grupo: SES.grupo } }); }
+  try { r = await rpc('estado', { a: { grupo: SES.grupo, jugador: SES.jugador || '', pin: SES.pin || '' } }); }
   catch { S.sinRed = true; render(); return; }
   S.sinRed = false;
   if (!r.ok) { manejarError(r.error); return; }
-  S.players = r.players || []; S.matches = r.matches || []; S.notas = r.notas || [];
+  S.players = r.players || []; S.matches = r.matches || [];
+  S.notasRes = r.notasRes || []; S.figuraRes = r.figuraRes || []; S.votantes = r.votantes || {}; S.misVotos = r.misVotos || [];
+  S.minVotos = r.minVotos || 3; S.registroAbierto = r.registroAbierto !== false;
   S.anotados = r.anotados || []; S.proxima = r.proxima || null; S.cargado = true;
-  if (SES.jugador && !pById(SES.jugador)) { delete SES.jugador; delete SES.pin; guardarSes(); }
+  if (SES.jugador && (!pById(SES.jugador) || r.errorJugador === 'pin' || r.errorJugador === 'jugador')) {
+    if (r.errorJugador === 'pin') toast(ERRORES.pin + ' Vuelve a elegir tu jugador.');
+    olvidarJugador();
+  }
+  S.errorJugador = r.errorJugador || null;
   if (S.equipos) {
     const ids = new Set(S.anotados.map(a => a.id)), eq = [...S.equipos.A, ...S.equipos.B];
     if (eq.length !== ids.size || eq.some(id => !ids.has(id))) S.equipos = null;
@@ -93,14 +106,17 @@ function toast(msg) { const t = $('#toast'); t.textContent = msg; t.hidden = fal
 /* ---------- estadísticas ---------- */
 const byFecha = (a, b) => (a.fecha || '').localeCompare(b.fecha || '') || (a.creado || 0) - (b.creado || 0);
 function jugo(mid, id) { const m = S.matches.find(x => x.id === mid); return !!m && ((m.equipoA || []).includes(id) || (m.equipoB || []).includes(id)); }
-const valida = (n, id) => n.rater !== id && jugo(n.matchId, id) && jugo(n.matchId, n.rater);
 // Figura del partido: la votan los que jugaron. Gana el más votado (si empatan, todos). Partidos viejos usan la elegida al cargarlos.
 function figuras(m) {
   const votos = {};
-  for (const n of S.notas) if (n.matchId === m.id && n.figura && valida(n, n.figura)) votos[n.figura] = (votos[n.figura] || 0) + 1;
+  for (const f of S.figuraRes) if (f.matchId === m.id) votos[f.id] = +f.votos || 0;
   const max = Math.max(0, ...Object.values(votos));
   if (!max) return { ids: m.mvp ? [m.mvp] : [], votos };
   return { ids: Object.keys(votos).filter(id => votos[id] === max), votos };
+}
+function respaldoViejo() {
+  let t = 0; try { t = +localStorage.getItem('favoritos-ultimo-respaldo') || 0; } catch {}
+  return Date.now() - t > 7 * 864e5;
 }
 const nombresFigura = ids => new Intl.ListFormat('es-CL').format(ids.map(pName));
 function stats() {
@@ -115,14 +131,13 @@ function stats() {
     for (const [id, n] of Object.entries(m.asist || {})) P(id).a += +n || 0;
     for (const id of figuras(m).ids) P(id).mvp++;
   }
-  for (const n of S.notas) for (const [id, v] of Object.entries(n.notas || {})) { const x = +v; if (x >= 1 && x <= 10 && valida(n, id)) { P(id).ns += x; P(id).nc++; } }
+  for (const n of S.notasRes) if (pById(n.id)) { P(n.id).ns += +n.suma || 0; P(n.id).nc += +n.n || 0; }
   for (const s of Object.values(st)) { s.pts = 3 * s.pg + s.pe; s.rend = s.pj ? s.pts / (3 * s.pj) : 0; s.nota = s.nc ? s.ns / s.nc : null; s.forma = s.forma.slice(-5); }
   return st;
 }
 function notasPartido(mid) {
-  const acc = {};
-  for (const n of S.notas) if (n.matchId === mid) for (const [id, v] of Object.entries(n.notas || {})) { const x = +v; if (x >= 1 && x <= 10 && valida(n, id)) (acc[id] ??= []).push(x); }
-  const out = {}; for (const [id, a] of Object.entries(acc)) out[id] = { avg: a.reduce((s, x) => s + x, 0) / a.length, n: a.length };
+  const out = {};
+  for (const n of S.notasRes) if (n.matchId === mid && +n.n > 0) out[n.id] = { avg: n.suma / n.n, n: +n.n };
   return out;
 }
 const SORTS = {
@@ -180,6 +195,7 @@ function render() {
   let html = '';
   if (S.sinRed) html += `<div class="note">Sin conexión. Lo que ves puede no estar al día.</div>`;
   html += bannerInstalar(false);
+  if (esAdmin() && respaldoViejo()) html += `<div class="note cta"><span><strong>Haz un respaldo.</strong> Pasó más de una semana desde el último. Guárdalo en un lugar privado (no en el grupo).</span><button class="btn pri" data-act="respaldo">Descargar</button></div>`;
   if (!me && S.players.length) html += `<div class="note cta"><span><strong>¿Quién eres?</strong> Elige tu jugador para anotarte, cargar partidos y poner notas.</span><button class="btn pri" data-act="quien">Elegir</button></div>`;
   html += ({ ranking: vRanking, partidos: vPartidos, plantel: vPlantel, proxima: vProxima }[S.view])();
   const scrollTabla = $('.tbl-wrap')?.scrollLeft || 0; // que la actualización automática no mueva la tabla
@@ -315,9 +331,9 @@ async function entrarJugador() {
   let r;
   try { r = await rpc('entrar', { a: { grupo: SES.grupo, jugador: sheetCtx.id, pin } }); }
   catch { toast('Sin conexión. Inténtalo de nuevo.'); return; }
-  if (!r.ok) { toast(ERRORES[r.error] || 'No se pudo entrar.'); if (r.error === 'grupo') manejarError('grupo'); return; }
-  SES.jugador = sheetCtx.id; SES.pin = pin; guardarSes();
-  closeSheet(); toast('¡Listo! Entraste como ' + pName(SES.jugador)); render();
+  if (!r.ok) { if (r.error === 'grupo' || r.error === 'clave_cambiada') manejarError(r.error); else toast(ERRORES[r.error] || 'No se pudo entrar.'); return; }
+  S.misVotos = []; SES.jugador = sheetCtx.id; SES.pin = pin; guardarSes();
+  closeSheet(); toast('¡Listo! Entraste como ' + pName(SES.jugador)); await refrescar();
 }
 
 function cuentaSheet() {
@@ -328,7 +344,11 @@ function cuentaSheet() {
       <div><div class="lbl2">Jugador</div><p style="margin:4px 0 8px">${me ? `Entraste como <strong>${esc(me.apodo || me.nombre)}</strong>.` : 'Todavía no eliges tu jugador.'}</p>
         <div class="row">${me ? `<button class="btn" data-act="edit-player" data-id="${esc(me.id)}">Editar mi ficha o PIN</button><button class="btn" data-act="salir-jugador">Cambiar de jugador</button>` : `<button class="btn pri" data-act="quien">Elegir mi jugador</button>`}</div></div>
       <div><div class="lbl2">Administrador</div>
-        ${esAdmin() ? `<p style="margin:4px 0 8px">Estás en modo administrador: puedes editar cualquier ficha, cambiar PIN y borrar jugadores.</p><button class="btn" data-act="salir-admin">Salir del modo administrador</button>`
+        ${esAdmin() ? `<p style="margin:4px 0 8px">Estás en modo administrador: puedes editar cualquier ficha, cambiar PIN y borrar jugadores.</p>
+          <div class="row"><button class="btn" data-act="respaldo">Descargar respaldo</button><button class="btn" data-act="papelera">Papelera de partidos</button><button class="btn" data-act="claves">Cambiar claves</button></div>
+          <p class="small" style="margin:10px 0 6px">Registro de jugadores nuevos: <strong>${S.registroAbierto ? 'abierto' : 'cerrado'}</strong>. ${S.registroAbierto ? 'Cualquiera con la clave del grupo puede anotarse.' : 'Solo tú puedes agregar jugadores.'}</p>
+          <div class="row"><button class="btn" data-act="registro">${S.registroAbierto ? 'Cerrar registro' : 'Abrir registro'}</button><button class="btn" data-act="salir-admin">Salir del modo administrador</button></div>
+          <p class="hint">Cuando termines, sal del modo administrador: mientras esté activo, tu clave queda guardada en este celular.</p>`
         : `<form id="f-admin" class="row" style="margin-top:6px"><div class="field"><label for="adm-in">Clave de administrador</label><input id="adm-in" type="password" autocomplete="current-password" required></div><button class="btn" type="submit" style="align-self:flex-end">Activar</button></form>`}</div>
       ${instalada ? '' : `<div><div class="lbl2">Instalar en tu celular</div>
         ${instalarEvt ? `<p style="margin:4px 0 8px">Agrega Los Favoritos a tu pantalla de inicio como una app.</p><button class="btn pri" data-act="instalar">Instalar app</button>`
@@ -338,12 +358,56 @@ function cuentaSheet() {
       <div class="row spread"><span class="hint">Las claves quedan guardadas solo en este celular.</span><button class="btn warn" data-act="salir-grupo">Cerrar sesión</button></div>
     </div>`, { type: 'cuenta' });
 }
+function registroOk() {
+  if (S.registroAbierto || esAdmin()) return true;
+  toast(ERRORES.registro_cerrado); return false;
+}
+function clavesForm() {
+  openSheet(`<h2>Cambiar claves</h2>`, `<form id="f-claves" class="stack">
+    <p class="muted small" style="margin:0">Deja en blanco la que no quieras cambiar. Si cambias la del grupo, todos tendrán que escribir la nueva: pásasela por interno.</p>
+    <div class="field"><label for="cl-grupo">Nueva clave del grupo (mínimo 6)</label><input id="cl-grupo" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" minlength="6"></div>
+    <div class="field"><label for="cl-admin">Nueva clave de administrador (mínimo 6)</label><input id="cl-admin" type="password" autocomplete="new-password" minlength="6"></div>
+    <div class="row" style="justify-content:flex-end"><button class="btn pri" type="submit">Guardar claves</button></div></form>`, { type: 'claves' });
+}
+async function guardarClaves() {
+  const g = $('#cl-grupo').value.trim(), ad = $('#cl-admin').value;
+  if (!g && !ad) { toast('Escribe al menos una clave nueva.'); return; }
+  let r; // sin accion(): refrescaría con la clave vieja antes de guardar la nueva
+  try { r = await rpc('cambiar_claves', { a: auth(), p_grupo: g, p_admin: ad }); } catch { toast('Sin conexión. Inténtalo de nuevo.'); return; }
+  if (!r.ok) { manejarError(r.error); return; }
+  if (g) SES.grupo = g; if (ad) SES.admin = ad; guardarSes();
+  closeSheet(); toast('Claves cambiadas'); refrescar();
+}
+async function descargarRespaldo() {
+  let r;
+  try { r = await rpc('respaldo', { a: auth() }); } catch { toast('Sin conexión. Inténtalo de nuevo.'); return; }
+  if (!r.ok) { manejarError(r.error); return; }
+  const nombre = 'los-favoritos-respaldo-' + today() + '.json';
+  const archivo = new File([JSON.stringify(r, null, 1)], nombre, { type: 'application/json' });
+  const listo = () => { try { localStorage.setItem('favoritos-ultimo-respaldo', String(Date.now())); } catch {} };
+  if (navigator.canShare?.({ files: [archivo] })) {
+    try { await navigator.share({ files: [archivo], title: nombre }); listo(); toast('Respaldo listo. Guárdalo en un lugar privado.'); render(); return; }
+    catch (e) { if (e.name === 'AbortError') return; }
+  }
+  const url = URL.createObjectURL(archivo), a = document.createElement('a');
+  a.href = url; a.download = nombre; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+  listo(); toast('Respaldo descargado. Guárdalo en un lugar privado.'); render();
+}
+async function verPapelera() {
+  let r;
+  try { r = await rpc('papelera', { a: auth() }); } catch { toast('Sin conexión. Inténtalo de nuevo.'); return; }
+  if (!r.ok) { manejarError(r.error); return; }
+  const ps = r.partidos || [];
+  openSheet(`<h2>Papelera</h2>`, `<p class="muted small" style="margin:0 0 8px">Los partidos borrados quedan aquí. Si alguien borró uno por error, recupéralo con sus notas y votos.</p>
+    ${ps.length ? `<div class="lista">${ps.map(m => `<div class="it"><span><span class="num">${esc(fmtFecha(m.fecha, { day: 'numeric', month: 'short', year: 'numeric' }))} · ${+m.golesA}–${+m.golesB}</span> <span class="muted small">${esc(m.lugar || '')}</span></span><button class="btn" data-act="restaurar" data-id="${esc(m.id)}">Recuperar</button></div>`).join('')}</div>` : '<p class="muted">No hay partidos borrados.</p>'}`, { type: 'papelera' });
+}
 async function activarAdmin() {
   const clave = $('#adm-in').value;
   let r;
   try { r = await rpc('entrar', { a: { grupo: SES.grupo, admin: clave } }); }
   catch { toast('Sin conexión. Inténtalo de nuevo.'); return; }
-  if (!r.ok) { toast(ERRORES[r.error] || 'No se pudo activar.'); return; }
+  if (!r.ok) { if (r.error === 'grupo' || r.error === 'clave_cambiada') manejarError(r.error); else toast(ERRORES[r.error] || 'No se pudo activar.'); return; }
   SES.admin = clave; guardarSes(); closeSheet(); toast('Modo administrador activado'); render();
 }
 
@@ -465,7 +529,8 @@ let myRates = {}, myFigura = '', rateCtx = null;
 function matchSheet(id) {
   const m = S.matches.find(x => x.id === id); if (!m) return;
   const a = +m.golesA || 0, b = +m.golesB || 0, np = notasPartido(id), me = myPlayer();
-  const mine = me ? S.notas.find(n => n.matchId === id && n.rater === me.id) : null;
+  const mine = me ? S.misVotos.find(n => n.matchId === id) : null;
+  const nv = +S.votantes[id] || 0;
   const fig = figuras(m);
   const team = (k, ids) => `<div class="team"><h3><span>${TEAM[k]}</span><span class="num">${k === 'A' ? a : b}</span></h3><ul>${ids.map(pid => `<li><span>${esc(pName(pid))}${fig.ids.includes(pid) ? ' <span class="me-tag">FIGURA</span>' : ''}${fig.votos[pid] ? ` <span class="small muted">(${fig.votos[pid]} ${fig.votos[pid] === 1 ? 'voto' : 'votos'})</span>` : ''}</span><span class="small muted num">${+m.goles?.[pid] ? m.goles[pid] + ' G ' : ''}${+m.asist?.[pid] ? m.asist[pid] + ' A ' : ''}${np[pid] ? `<span class="badge-n">${fmt1(np[pid].avg)}</span>` : ''}</span></li>`).join('')}</ul></div>`;
   const votables = [...(m.equipoA || []), ...(m.equipoB || [])].filter(pid => pById(pid) && pid !== me?.id);
@@ -475,8 +540,9 @@ function matchSheet(id) {
   const rateRows = votables.map(pid => `<div class="prow"><span class="nm">${esc(pName(pid))}</span><span class="rate">${[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => `<button type="button" data-rate="${n}" data-id="${esc(pid)}" aria-pressed="${+myRates[pid] === n}">${n}</button>`).join('')}</span></div>`).join('');
   openSheet(`<h2 class="num">${a} – ${b}</h2><div class="small" style="opacity:.85">${esc(fmtFecha(m.fecha, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }))}${m.lugar ? ' · ' + esc(m.lugar) : ''}</div>`, `
    <div class="teams">${team('A', m.equipoA || [])}${team('B', m.equipoB || [])}</div>
-   <p class="muted small" style="margin:0">El número amarillo es la nota promedio que le pusieron los demás en este partido.</p>
-   ${me && !jugo(id, me.id) ? `<div class="note small">Solo ponen notas y votan la figura los que jugaron este partido.</div>`
+   <p class="muted small" style="margin:0">Votaron ${nv}. Los votos son secretos: la nota de cada uno (el número amarillo) aparece cuando lo califican al menos ${S.minVotos}, y la figura cuando la votan al menos ${S.minVotos}. Así nadie puede adivinar qué puso otro.</p>
+   ${me && S.errorJugador === 'bloqueado' ? `<div class="note small">Tu PIN quedó bloqueado unos minutos por intentos fallidos. Vuelve a abrir el partido más rato para votar.</div>`
+    : me && !jugo(id, me.id) ? `<div class="note small">Solo ponen notas y votan la figura los que jugaron este partido.</div>`
     : me ? `<div><div class="lbl2">Tus notas${mine ? ' (ya votaste, puedes cambiar tu voto)' : ''}</div><p class="muted small" style="margin:2px 0 4px">Del 1 al 10. Tu nota es una más en el promedio. A ti no te aparece: nadie se pone nota a sí mismo.</p>${rateRows || '<p class="muted">No hay a quién ponerle nota.</p>'}
      ${votables.length ? `<div class="lbl2" style="margin-top:14px">Tu figura del partido</div><p class="muted small" style="margin:2px 0 6px">Gana el más votado. No puedes votarte a ti mismo.</p>
      <div class="row figs" style="gap:6px">${votables.map(pid => `<button type="button" class="chip" data-fig="${esc(pid)}" aria-pressed="${myFigura === pid}">${esc(pName(pid))}</button>`).join('')}</div>` : ''}
@@ -542,8 +608,13 @@ document.addEventListener('click', async e => {
     case 'reintentar': boot(); break;
     case 'cuenta': cuentaSheet(); break;
     case 'quien': quienEres(); break;
-    case 'nuevo-yo': playerForm(null, true); break;
-    case 'new-player': playerForm(null, false); break;
+    case 'nuevo-yo': if (registroOk()) playerForm(null, true); break;
+    case 'new-player': if (registroOk()) playerForm(null, false); break;
+    case 'claves': clavesForm(); break;
+    case 'registro': once(async () => { if (await accion('registro', { p_abierto: !S.registroAbierto }, S.registroAbierto ? 'Registro cerrado: solo tú puedes agregar jugadores' : 'Registro abierto')) cuentaSheet(); }); break;
+    case 'respaldo': once(descargarRespaldo); break;
+    case 'papelera': once(verPapelera); break;
+    case 'restaurar': once(async () => { if (await accion('restaurar_partido', { p_id: ds.id }, 'Partido recuperado')) verPapelera(); }); break;
     case 'edit-player': playerForm(pById(ds.id)); break;
     case 'del-player':
       if (armedDel !== t) { arm(t, '¿Seguro? Toca otra vez'); return; }
@@ -553,7 +624,7 @@ document.addEventListener('click', async e => {
     case 'save-match': once(saveMatch); break;
     case 'del-match':
       if (armedDel !== t) { arm(t, '¿Seguro? Toca otra vez'); return; }
-      disarm(); once(async () => { if (await accion('borrar_partido', { p_id: draft.id }, 'Partido borrado')) closeSheet(); }); break;
+      disarm(); once(async () => { if (await accion('borrar_partido', { p_id: draft.id }, 'Partido borrado. El administrador lo puede recuperar.')) closeSheet(); }); break;
     case 'save-rates': once(saveRates); break;
     case 'edit-prox': if (necesitaJugador()) proxForm(); break;
     case 'armar': armar(); break;
@@ -562,7 +633,7 @@ document.addEventListener('click', async e => {
       if (!necesitaJugador()) return;
       if (armedDel !== t) { arm(t, '¿Vaciar? Toca otra vez'); return; }
       disarm(); once(async () => { if (await accion('vaciar_anotados', {}, 'Lista vaciada')) { S.equipos = null; render(); } }); break;
-    case 'salir-jugador': delete SES.jugador; delete SES.pin; guardarSes(); closeSheet(); render(); quienEres(); break;
+    case 'salir-jugador': olvidarJugador(); closeSheet(); render(); quienEres(); break;
     case 'salir-admin': delete SES.admin; guardarSes(); closeSheet(); toast('Saliste del modo administrador'); render(); break;
     case 'salir-grupo': SES = {}; guardarSes(); closeSheet(); S.pantalla = 'grupo'; render(); break;
     case 'instalar': if (instalarEvt) {
@@ -580,6 +651,7 @@ document.addEventListener('submit', async e => {
   else if (id === 'f-prox') once(saveProx);
   else if (id === 'f-pin') once(entrarJugador);
   else if (id === 'f-admin') once(activarAdmin);
+  else if (id === 'f-claves') once(guardarClaves);
   else if (id === 'f-grupo') once(entrarGrupo);
   else if (id === 'f-setup') once(configurar);
 });
