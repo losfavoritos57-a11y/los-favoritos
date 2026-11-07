@@ -1,5 +1,5 @@
 // Guarda los archivos de la app para que abra rápido. Los datos siempre vienen de Supabase.
-const CACHE = 'favoritos-v5';
+const CACHE = 'favoritos-v6';
 const SHELL = ['/', '/app.css', '/app.js', '/config.js', '/manifest.webmanifest', '/icons/icon-192.png'];
 
 self.addEventListener('install', e => {

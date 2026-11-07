@@ -49,6 +49,8 @@ create table if not exists public.notas (
   ts timestamptz not null default now(),
   primary key (match_id, rater)
 );
+-- Voto de figura del partido (uno por jugador que jugó; nunca a sí mismo).
+alter table public.notas add column if not exists figura uuid references public.players(id) on delete set null;
 
 create table if not exists public.anotados (
   player_id uuid primary key references public.players(id) on delete cascade,
@@ -191,7 +193,7 @@ begin
         'equipoA', to_jsonb(equipo_a), 'equipoB', to_jsonb(equipo_b), 'golesA', goles_a, 'golesB', goles_b,
         'goles', goles, 'asist', asist, 'mvp', mvp, 'creado', extract(epoch from creado) * 1000))
       from public.matches), '[]'),
-    'notas', coalesce((select jsonb_agg(jsonb_build_object('matchId', match_id, 'rater', rater, 'notas', notas))
+    'notas', coalesce((select jsonb_agg(jsonb_build_object('matchId', match_id, 'rater', rater, 'notas', notas, 'figura', figura))
       from public.notas), '[]'),
     'anotados', coalesce((select jsonb_agg(jsonb_build_object('id', player_id)) from public.anotados), '[]'),
     'proxima', (select jsonb_build_object('fecha', fecha, 'hora', hora, 'lugar', lugar, 'cupos', cupos)
@@ -297,6 +299,8 @@ begin
     delete from public.notas where match_id = nid and not (rater = any(ea || eb));
     update public.notas set notas = (select coalesce(jsonb_object_agg(key, value), '{}')
       from jsonb_each(notas) where key::uuid = any(ea || eb)) where match_id = nid;
+    update public.notas set figura = null where match_id = nid and not (figura = any(ea || eb));
+    delete from public.notas where match_id = nid and notas = '{}' and figura is null;
   end if;
   return jsonb_build_object('ok', true, 'id', nid);
 exception when check_violation or invalid_text_representation or invalid_datetime_format
@@ -315,10 +319,11 @@ begin
   return jsonb_build_object('ok', true);
 end $$;
 
--- Poner notas: el jugador con su PIN, solo si jugó ese partido. Solo a quienes jugaron y nunca a sí mismo.
-create or replace function public.votar(a jsonb, p_match uuid, p_notas jsonb) returns jsonb
+-- Poner notas y votar figura: el jugador con su PIN, solo si jugó ese partido. Solo a quienes jugaron y nunca a sí mismo.
+drop function if exists public.votar(jsonb, uuid, jsonb);
+create or replace function public.votar(a jsonb, p_match uuid, p_notas jsonb, p_figura uuid default null) returns jsonb
 language plpgsql security definer set search_path = public, extensions, pg_temp as $$
-declare au jsonb; yo uuid; m public.matches; limpio jsonb := '{}'; k text; v text; n int;
+declare au jsonb; yo uuid; m public.matches; limpio jsonb := '{}'; k text; v text; n int; fig uuid;
 begin
   au := priv.auth(jsonb_build_object('grupo', a->>'grupo', 'jugador', a->>'jugador', 'pin', a->>'pin'), true);
   if not (au->>'ok')::boolean then return au; end if;
@@ -332,11 +337,12 @@ begin
       limpio := limpio || jsonb_build_object(k, n);
     end if;
   end loop;
-  if limpio = '{}' then
+  if p_figura <> yo and p_figura = any(m.equipo_a || m.equipo_b) then fig := p_figura; end if;
+  if limpio = '{}' and fig is null then
     delete from public.notas where match_id = p_match and rater = yo;
   else
-    insert into public.notas (match_id, rater, notas) values (p_match, yo, limpio)
-      on conflict (match_id, rater) do update set notas = excluded.notas, ts = now();
+    insert into public.notas (match_id, rater, notas, figura) values (p_match, yo, limpio, fig)
+      on conflict (match_id, rater) do update set notas = excluded.notas, figura = excluded.figura, ts = now();
   end if;
   return jsonb_build_object('ok', true);
 exception when invalid_text_representation then
@@ -392,10 +398,10 @@ language sql security definer set search_path = public, pg_temp as $$ select 1 $
 revoke all on function public.configurar(text, text), public.configurado(), public.entrar(jsonb),
   public.estado(jsonb), public.crear_jugador(jsonb, jsonb, text), public.editar_jugador(jsonb, uuid, jsonb, text),
   public.borrar_jugador(jsonb, uuid), public.guardar_partido(jsonb, uuid, jsonb), public.borrar_partido(jsonb, uuid),
-  public.votar(jsonb, uuid, jsonb), public.anotar(jsonb, uuid, boolean), public.vaciar_anotados(jsonb),
+  public.votar(jsonb, uuid, jsonb, uuid), public.anotar(jsonb, uuid, boolean), public.vaciar_anotados(jsonb),
   public.guardar_proxima(jsonb, jsonb), public.ping() from public;
 grant execute on function public.configurar(text, text), public.configurado(), public.entrar(jsonb),
   public.estado(jsonb), public.crear_jugador(jsonb, jsonb, text), public.editar_jugador(jsonb, uuid, jsonb, text),
   public.borrar_jugador(jsonb, uuid), public.guardar_partido(jsonb, uuid, jsonb), public.borrar_partido(jsonb, uuid),
-  public.votar(jsonb, uuid, jsonb), public.anotar(jsonb, uuid, boolean), public.vaciar_anotados(jsonb),
+  public.votar(jsonb, uuid, jsonb, uuid), public.anotar(jsonb, uuid, boolean), public.vaciar_anotados(jsonb),
   public.guardar_proxima(jsonb, jsonb), public.ping() to anon;

@@ -37,7 +37,7 @@ const ERRORES = {
   no_es_tuyo: 'Solo puedes editar tu propia ficha.',
   lleno: 'Ya hay 60 jugadores. No caben más.',
   partido: 'Ese partido ya no existe.',
-  no_jugaste: 'Solo ponen notas los que jugaron ese partido.',
+  no_jugaste: 'Solo votan los que jugaron ese partido.',
   jugador: 'Ese jugador ya no existe.',
   sin_configurar: 'La app todavía no está configurada.',
 };
@@ -94,6 +94,15 @@ function toast(msg) { const t = $('#toast'); t.textContent = msg; t.hidden = fal
 const byFecha = (a, b) => (a.fecha || '').localeCompare(b.fecha || '') || (a.creado || 0) - (b.creado || 0);
 function jugo(mid, id) { const m = S.matches.find(x => x.id === mid); return !!m && ((m.equipoA || []).includes(id) || (m.equipoB || []).includes(id)); }
 const valida = (n, id) => n.rater !== id && jugo(n.matchId, id) && jugo(n.matchId, n.rater);
+// Figura del partido: la votan los que jugaron. Gana el más votado (si empatan, todos). Partidos viejos usan la elegida al cargarlos.
+function figuras(m) {
+  const votos = {};
+  for (const n of S.notas) if (n.matchId === m.id && n.figura && valida(n, n.figura)) votos[n.figura] = (votos[n.figura] || 0) + 1;
+  const max = Math.max(0, ...Object.values(votos));
+  if (!max) return { ids: m.mvp ? [m.mvp] : [], votos };
+  return { ids: Object.keys(votos).filter(id => votos[id] === max), votos };
+}
+const nombresFigura = ids => new Intl.ListFormat('es-CL').format(ids.map(pName));
 function stats() {
   const st = {};
   const P = id => st[id] ??= { pj: 0, pg: 0, pe: 0, pp: 0, g: 0, a: 0, mvp: 0, ns: 0, nc: 0, gf: 0, gc: 0, forma: [] };
@@ -104,7 +113,7 @@ function stats() {
       for (const id of team) { const s = P(id), r = gf > gc ? 'G' : gf < gc ? 'P' : 'E'; s.pj++; s.gf += gf; s.gc += gc; s[{ G: 'pg', E: 'pe', P: 'pp' }[r]]++; s.forma.push(r); }
     for (const [id, n] of Object.entries(m.goles || {})) P(id).g += +n || 0;
     for (const [id, n] of Object.entries(m.asist || {})) P(id).a += +n || 0;
-    if (m.mvp) P(m.mvp).mvp++;
+    for (const id of figuras(m).ids) P(id).mvp++;
   }
   for (const n of S.notas) for (const [id, v] of Object.entries(n.notas || {})) { const x = +v; if (x >= 1 && x <= 10 && valida(n, id)) { P(id).ns += x; P(id).nc++; } }
   for (const s of Object.values(st)) { s.pts = 3 * s.pg + s.pe; s.rend = s.pj ? s.pts / (3 * s.pj) : 0; s.nota = s.nc ? s.ns / s.nc : null; s.forma = s.forma.slice(-5); }
@@ -231,7 +240,7 @@ function vPartidos() {
   return head + `<div class="matches">${ms.map(m => { const a = +m.golesA || 0, b = +m.golesB || 0; return `<button class="match" data-match="${esc(m.id)}">
     <div class="row spread small muted"><span>${esc(fmtFecha(m.fecha, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }))}</span><span>${esc(m.lugar || '')}</span></div>
     <div class="score"><span class="t">${TEAM.A}</span><span class="n num"><span class="${a > b ? 'win' : ''}">${a}</span> – <span class="${b > a ? 'win' : ''}">${b}</span></span><span class="t b">${TEAM.B}</span></div>
-    <div class="scorers">${scorersLine(m)}${m.mvp ? ` · Figura: ${esc(pName(m.mvp))}` : ''}</div></button>`; }).join('')}</div>`;
+    <div class="scorers">${scorersLine(m)}${(f => f.length ? ` · Figura: ${esc(nombresFigura(f))}` : '')(figuras(m).ids)}</div></button>`; }).join('')}</div>`;
 }
 function vPlantel() {
   const st = stats();
@@ -377,7 +386,7 @@ function playerSheet(id) {
   const hist = [...S.matches].filter(m => (m.equipoA || []).includes(id) || (m.equipoB || []).includes(id)).sort(byFecha).reverse().slice(0, 8);
   const rows = hist.map(m => {
     const inA = (m.equipoA || []).includes(id), gf = inA ? +m.golesA || 0 : +m.golesB || 0, gc = inA ? +m.golesB || 0 : +m.golesA || 0, r = gf > gc ? 'G' : gf < gc ? 'P' : 'E', np = notasPartido(m.id)[id];
-    return `<div class="prow"><span class="nm">${forma([r])} ${esc(fmtFecha(m.fecha))} <span class="num">${gf}–${gc}</span></span><span class="small muted num">${+m.goles?.[id] ? m.goles[id] + ' G ' : ''}${+m.asist?.[id] ? m.asist[id] + ' A ' : ''}${m.mvp === id ? '· Figura ' : ''}${np ? `· nota ${fmt1(np.avg)}` : ''}</span></div>`;
+    return `<div class="prow"><span class="nm">${forma([r])} ${esc(fmtFecha(m.fecha))} <span class="num">${gf}–${gc}</span></span><span class="small muted num">${+m.goles?.[id] ? m.goles[id] + ' G ' : ''}${+m.asist?.[id] ? m.asist[id] + ' A ' : ''}${figuras(m).ids.includes(id) ? '· Figura ' : ''}${np ? `· nota ${fmt1(np.avg)}` : ''}</span></div>`;
   }).join('');
   const puedeEditar = esAdmin() || id === SES.jugador;
   openSheet(`<h2>${esc(p.apodo || p.nombre)}</h2><div class="small" style="opacity:.85">${esc(p.nombre)}${p.numero != null ? ' · #' + esc(p.numero) : ''} · ${esc(POS[p.posicion] || 'Sin posición')}${p.posicion2 ? ' / ' + esc(POS[p.posicion2]) : ''}${p.pie ? ' · Pie ' + esc(p.pie.toLowerCase()) : ''}</div>`, `
@@ -414,7 +423,6 @@ function matchForm(m, pre) {
 function renderMatchForm() {
   const d = draft;
   const ps = d.orden.map(pById).filter(Boolean);
-  const jug = ps.filter(p => d.asign[p.id]);
   $('#mf').innerHTML = `<div class="stack">
    <div class="row"><div class="field"><label for="mf-fecha">Fecha</label><input id="mf-fecha" type="date" value="${esc(d.fecha)}"></div>
     <div class="field"><label for="mf-lugar">Cancha</label><input id="mf-lugar" maxlength="50" value="${esc(d.lugar)}" placeholder="Ej: Club Ñuñoa, cancha 3"></div></div>
@@ -426,7 +434,6 @@ function renderMatchForm() {
      <span class="row" style="gap:8px">${t ? `<span class="step">G<button type="button" data-st="goles" data-id="${esc(p.id)}" data-d="-1" aria-label="Quitar gol">−</button><b class="num">${+d.goles[p.id] || 0}</b><button type="button" data-st="goles" data-id="${esc(p.id)}" data-d="1" aria-label="Sumar gol">+</button></span>
        <span class="step">A<button type="button" data-st="asist" data-id="${esc(p.id)}" data-d="-1" aria-label="Quitar asistencia">−</button><b class="num">${+d.asist[p.id] || 0}</b><button type="button" data-st="asist" data-id="${esc(p.id)}" data-d="1" aria-label="Sumar asistencia">+</button></span>` : ''}
      <span class="seg"><button type="button" class="a" data-asig="A" data-id="${esc(p.id)}" aria-pressed="${t === 'A'}">Peto</button><button type="button" data-asig="" data-id="${esc(p.id)}" aria-pressed="${!t}">No</button><button type="button" class="b" data-asig="B" data-id="${esc(p.id)}" aria-pressed="${t === 'B'}">Sin</button></span></span></div>`; }).join('')}</div>
-   <div class="field"><label for="mf-mvp">Figura del partido</label><select id="mf-mvp"><option value="">—</option>${jug.map(p => `<option value="${esc(p.id)}" ${d.mvp === p.id ? 'selected' : ''}>${esc(p.apodo || p.nombre)}</option>`).join('')}</select></div>
    <div class="row spread">${d.id ? `<button type="button" class="btn warn" data-act="del-match">Borrar partido</button>` : '<span></span>'}<button type="button" class="btn pri" data-act="save-match">Guardar partido</button></div></div>`;
 }
 function syncScore() {
@@ -436,13 +443,13 @@ function syncScore() {
 }
 function keepInputs() {
   const g = id => $('#' + id); if (!g('mf-fecha')) return;
-  draft.fecha = g('mf-fecha').value; draft.lugar = g('mf-lugar').value; draft.mvp = g('mf-mvp').value;
+  draft.fecha = g('mf-fecha').value; draft.lugar = g('mf-lugar').value;
   if (draft.tocado) { draft.golesA = +g('mf-ga').value || 0; draft.golesB = +g('mf-gb').value || 0; }
 }
 async function saveMatch() {
   const d = draft;
   d.fecha = $('#mf-fecha').value || today(); d.lugar = $('#mf-lugar').value.trim();
-  d.golesA = Math.max(0, +$('#mf-ga').value || 0); d.golesB = Math.max(0, +$('#mf-gb').value || 0); d.mvp = $('#mf-mvp').value;
+  d.golesA = Math.max(0, +$('#mf-ga').value || 0); d.golesB = Math.max(0, +$('#mf-gb').value || 0);
   const A = Object.keys(d.asign).filter(id => d.asign[id] === 'A'), B = Object.keys(d.asign).filter(id => d.asign[id] === 'B');
   if (!A.length || !B.length) { toast(ERRORES.equipos); return; }
   const ind = t => t.reduce((s, id) => s + (+d.goles[id] || 0), 0);
@@ -454,31 +461,36 @@ async function saveMatch() {
 }
 
 /* detalle de partido + notas */
-let myRates = {}, rateCtx = null;
+let myRates = {}, myFigura = '', rateCtx = null;
 function matchSheet(id) {
   const m = S.matches.find(x => x.id === id); if (!m) return;
   const a = +m.golesA || 0, b = +m.golesB || 0, np = notasPartido(id), me = myPlayer();
   const mine = me ? S.notas.find(n => n.matchId === id && n.rater === me.id) : null;
-  const team = (k, ids) => `<div class="team"><h3><span>${TEAM[k]}</span><span class="num">${k === 'A' ? a : b}</span></h3><ul>${ids.map(pid => `<li><span>${esc(pName(pid))}${m.mvp === pid ? ' <span class="me-tag">FIGURA</span>' : ''}</span><span class="small muted num">${+m.goles?.[pid] ? m.goles[pid] + ' G ' : ''}${+m.asist?.[pid] ? m.asist[pid] + ' A ' : ''}${np[pid] ? `<span class="badge-n">${fmt1(np[pid].avg)}</span>` : ''}</span></li>`).join('')}</ul></div>`;
+  const fig = figuras(m);
+  const team = (k, ids) => `<div class="team"><h3><span>${TEAM[k]}</span><span class="num">${k === 'A' ? a : b}</span></h3><ul>${ids.map(pid => `<li><span>${esc(pName(pid))}${fig.ids.includes(pid) ? ' <span class="me-tag">FIGURA</span>' : ''}${fig.votos[pid] ? ` <span class="small muted">(${fig.votos[pid]} ${fig.votos[pid] === 1 ? 'voto' : 'votos'})</span>` : ''}</span><span class="small muted num">${+m.goles?.[pid] ? m.goles[pid] + ' G ' : ''}${+m.asist?.[pid] ? m.asist[pid] + ' A ' : ''}${np[pid] ? `<span class="badge-n">${fmt1(np[pid].avg)}</span>` : ''}</span></li>`).join('')}</ul></div>`;
   const votables = [...(m.equipoA || []), ...(m.equipoB || [])].filter(pid => pById(pid) && pid !== me?.id);
   myRates = Object.fromEntries(Object.entries(mine?.notas || {}).filter(([pid]) => votables.includes(pid)));
+  myFigura = votables.includes(mine?.figura) ? mine.figura : '';
   rateCtx = { mid: id, votables, existia: !!mine };
   const rateRows = votables.map(pid => `<div class="prow"><span class="nm">${esc(pName(pid))}</span><span class="rate">${[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => `<button type="button" data-rate="${n}" data-id="${esc(pid)}" aria-pressed="${+myRates[pid] === n}">${n}</button>`).join('')}</span></div>`).join('');
   openSheet(`<h2 class="num">${a} – ${b}</h2><div class="small" style="opacity:.85">${esc(fmtFecha(m.fecha, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }))}${m.lugar ? ' · ' + esc(m.lugar) : ''}</div>`, `
    <div class="teams">${team('A', m.equipoA || [])}${team('B', m.equipoB || [])}</div>
    <p class="muted small" style="margin:0">El número amarillo es la nota promedio que le pusieron los demás en este partido.</p>
-   ${me && !jugo(id, me.id) ? `<div class="note small">Solo ponen notas los que jugaron este partido.</div>`
-    : me ? `<div><div class="lbl2">Tus notas${mine ? ' (ya votaste, puedes cambiarlas)' : ''}</div><p class="muted small" style="margin:2px 0 4px">Del 1 al 10. Tu nota es una más en el promedio. A ti no te aparece: nadie se pone nota a sí mismo.</p>${rateRows || '<p class="muted">No hay a quién ponerle nota.</p>'}
-     <div class="row" style="justify-content:flex-end;margin-top:8px"><button class="btn pri" data-act="save-rates">Guardar mis notas</button></div></div>`
-    : `<div class="note cta small"><span>Para poner notas, primero elige tu jugador.</span><button class="btn pri" data-act="quien">Elegir</button></div>`}
+   ${me && !jugo(id, me.id) ? `<div class="note small">Solo ponen notas y votan la figura los que jugaron este partido.</div>`
+    : me ? `<div><div class="lbl2">Tus notas${mine ? ' (ya votaste, puedes cambiar tu voto)' : ''}</div><p class="muted small" style="margin:2px 0 4px">Del 1 al 10. Tu nota es una más en el promedio. A ti no te aparece: nadie se pone nota a sí mismo.</p>${rateRows || '<p class="muted">No hay a quién ponerle nota.</p>'}
+     ${votables.length ? `<div class="lbl2" style="margin-top:14px">Tu figura del partido</div><p class="muted small" style="margin:2px 0 6px">Gana el más votado. No puedes votarte a ti mismo.</p>
+     <div class="row figs" style="gap:6px">${votables.map(pid => `<button type="button" class="chip" data-fig="${esc(pid)}" aria-pressed="${myFigura === pid}">${esc(pName(pid))}</button>`).join('')}</div>` : ''}
+     <div class="row" style="justify-content:flex-end;margin-top:8px"><button class="btn pri" data-act="save-rates">Guardar mi voto</button></div></div>`
+    : `<div class="note cta small"><span>Para poner notas y votar la figura, primero elige tu jugador.</span><button class="btn pri" data-act="quien">Elegir</button></div>`}
    <div class="row"><button class="btn" data-act="edit-match" data-id="${esc(id)}">Editar partido</button></div>`, { type: 'mview', id });
 }
 async function saveRates() {
   if (!myPlayer()) { quienEres(); return; }
   const notas = Object.fromEntries(Object.entries(myRates).filter(([pid, n]) => +n >= 1 && +n <= 10 && rateCtx.votables.includes(pid)));
-  if (!Object.keys(notas).length && !rateCtx.existia) { toast('Pon al menos una nota'); return; }
-  const vacio = !Object.keys(notas).length;
-  const r = await accion('votar', { p_match: rateCtx.mid, p_notas: notas }, vacio ? 'Borraste tus notas de este partido' : 'Notas guardadas');
+  const figura = rateCtx.votables.includes(myFigura) ? myFigura : null;
+  const vacio = !Object.keys(notas).length && !figura;
+  if (vacio && !rateCtx.existia) { toast('Pon al menos una nota o elige tu figura'); return; }
+  const r = await accion('votar', { p_match: rateCtx.mid, p_notas: notas, p_figura: figura }, vacio ? 'Borraste tu voto de este partido' : 'Voto guardado');
   if (r) closeSheet();
 }
 
@@ -521,6 +533,7 @@ document.addEventListener('click', async e => {
     syncScore(); renderMatchForm(); return;
   }
   if (ds.st && draft) { keepInputs(); const o = draft[ds.st]; o[ds.id] = Math.max(0, (+o[ds.id] || 0) + (+ds.d)); if (ds.st === 'goles') syncScore(); renderMatchForm(); return; }
+  if (ds.fig) { myFigura = myFigura === ds.fig ? '' : ds.fig; t.closest('.figs').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.fig === myFigura))); return; }
   if (ds.rate) { const cur = +myRates[ds.id]; myRates[ds.id] = cur === +ds.rate ? 0 : +ds.rate; t.closest('.rate').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.rate === myRates[ds.id]))); return; }
   if (ds.player && !ds.act) { playerSheet(ds.player); return; }
   if (ds.match) { matchSheet(ds.match); return; }
