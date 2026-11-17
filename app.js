@@ -1,6 +1,6 @@
 import { CONFIG } from './config.js';
 
-const VERSION = 'v12'; // subirla junto con CACHE en sw.js y version.json en cada publicación
+const VERSION = 'v13'; // subirla junto con CACHE en sw.js y version.json en cada publicación
 const POS = { POR: 'Arquero', DEF: 'Defensa', MED: 'Volante', DEL: 'Delantero' };
 const POS_ICO = { POR: '🧤', DEF: '🛡️', MED: '⚙️', DEL: '⚽' };
 const POS_CORTO = { POR: 'Arq', DEF: 'Def', MED: 'Vol', DEL: 'Del' };
@@ -326,36 +326,77 @@ function vProxima() {
   const ps = [...S.players].sort((a, b) => (voy.has(b.id) - voy.has(a.id)) || ((b.id === me?.id) - (a.id === me?.id)) || (a.apodo || a.nombre).localeCompare(b.apodo || b.nombre));
   const lista = `<div class="lista">${ps.map(p => `<div class="it"><span><span class="pname">${esc(p.apodo || p.nombre)}</span>${posTag(p)}${meTag(p)}</span>
     <button class="btn voy" data-voy="${esc(p.id)}" aria-pressed="${voy.has(p.id)}">${voy.has(p.id) ? 'Voy' : 'Anotar'}</button></div>`).join('')}</div>`;
-  const al = alin(), eq = al || n ? vAlineacion(al || { A: [], B: [], pos: {} }) : ''; // la cancha se ve apenas hay anotados
+  const al = alin(), eq = al || n ? vAlineacion(al) : ''; // la cancha se ve apenas hay anotados
   return info + (n ? `<div class="row"><button class="btn" data-act="armar">${al ? 'Volver a ubicar por posición' : 'Ubicar a todos por su posición'}</button><button class="btn warn" data-act="limpiar">Vaciar lista</button></div>` : '') + eq + lista;
 }
-// Alineación de la próxima pichanga (queda guardada para todos): A son los titulares en la cancha;
-// los demás anotados son suplentes (la banca). B queda vacío (era del formato de dos equipos).
-function alin() {
-  const x = S.proxima?.alineacion;
-  if (!x || !Array.isArray(x.A)) return null;
-  const A = x.A.filter(pById);
-  if (!A.length) return null;
-  const pos = { ...(x.pos || {}) }; A.forEach(id => pos[id] ||= 'MED'); // sin puesto se dibuja de volante
-  return { A, B: [], pos };
+// Alineación de la próxima pichanga (queda guardada para todos), como en el FIFA: una formación
+// de fútbol 6 o fútbol 5 con una casilla por titular; los demás anotados son suplentes (la banca).
+// x, y: dónde va cada casilla en la cancha, en % (nuestro arco abajo).
+const FORMACIONES = {
+  '6:2-2-1': [['POR', 50, 87], ['DEF', 28, 66], ['DEF', 72, 66], ['MED', 28, 42], ['MED', 72, 42], ['DEL', 50, 17]],
+  '6:2-1-2': [['POR', 50, 87], ['DEF', 28, 66], ['DEF', 72, 66], ['MED', 50, 43], ['DEL', 28, 18], ['DEL', 72, 18]],
+  '6:1-2-2': [['POR', 50, 87], ['DEF', 50, 66], ['MED', 24, 44], ['MED', 76, 44], ['DEL', 30, 18], ['DEL', 70, 18]],
+  '6:3-1-1': [['POR', 50, 87], ['DEF', 18, 64], ['DEF', 50, 67], ['DEF', 82, 64], ['MED', 50, 42], ['DEL', 50, 17]],
+  '5:2-1-1': [['POR', 50, 87], ['DEF', 28, 65], ['DEF', 72, 65], ['MED', 50, 42], ['DEL', 50, 17]],
+  '5:1-2-1': [['POR', 50, 87], ['DEF', 50, 66], ['MED', 24, 43], ['MED', 76, 43], ['DEL', 50, 17]],
+  '5:2-2': [['POR', 50, 87], ['DEF', 28, 63], ['DEF', 72, 63], ['DEL', 28, 27], ['DEL', 72, 27]],
+};
+const FORM_DEF = '6:2-2-1';
+let formElegida = FORM_DEF; // formación de la cancha vacía, antes de ubicar a nadie
+// Reparte jugadores en las casillas de una formación: primero por su puesto, después por el segundo
+// puesto y al final al que sobre (el arco queda vacío si no hay arquero). Los que no caben van a la banca.
+function ubicar(f, ids, pref = {}) {
+  const forma = FORMACIONES[f], slots = forma.map(() => null), libres = [...ids];
+  const p1 = id => pref[id] || pById(id)?.posicion || 'MED';
+  const llenar = cumple => forma.forEach(([p], i) => { if (slots[i]) return; const j = libres.findIndex(id => cumple(id, p)); if (j >= 0) slots[i] = libres.splice(j, 1)[0]; });
+  llenar((id, p) => p1(id) === p);
+  llenar((id, p) => pById(id)?.posicion === p);
+  llenar((id, p) => pById(id)?.posicion2 === p);
+  llenar((id, p) => p !== 'POR' && p1(id) !== 'POR');
+  llenar((id, p) => p !== 'POR');
+  return slots;
 }
-const suplentes = al => S.anotados.map(a => a.id).filter(id => pById(id) && !(al?.A || []).includes(id));
+function alin() {
+  const x = S.proxima?.alineacion; if (!x) return null;
+  const f = FORMACIONES[x.formacion] ? x.formacion : FORM_DEF;
+  let slots = Array.isArray(x.slots) && x.slots.length === FORMACIONES[f].length ? x.slots.map(id => id && pById(id) ? id : null)
+    : Array.isArray(x.A) ? ubicar(f, x.A.filter(pById), x.pos || {}) : null; // alineación guardada antes de las formaciones
+  if (!slots) return null;
+  const vistos = new Set(); slots = slots.map(id => id && !vistos.has(id) ? (vistos.add(id), id) : null);
+  return slots.some(Boolean) ? { formacion: f, slots } : null;
+}
+const titulares = al => (al?.slots || []).filter(Boolean);
+const posAlin = al => Object.fromEntries((al?.slots || []).map((id, i) => [id, FORMACIONES[al.formacion][i][0]]).filter(([id]) => id));
+const suplentes = al => S.anotados.map(a => a.id).filter(id => pById(id) && !titulares(al).includes(id));
+const paraGuardar = al => al && al.slots.some(Boolean) ? { formacion: al.formacion, slots: al.slots, A: titulares(al), B: [], pos: posAlin(al) } : null;
 let selJug = null, arrastre = null; // jugador elegido con un toque / arrastre en curso en la cancha
-function guardarAlin(d, msg) {
+function guardarAlin(al, msg) {
   selJug = null;
+  const d = paraGuardar(al);
+  if (al) formElegida = al.formacion;
   S.proxima = { ...(S.proxima || {}), alineacion: d }; render(); // se ve al tiro; después se guarda
   guardarAlinCola(d, msg);
 }
-// Mueve a un jugador a una zona de la cancha ("A:DEF", "A:POR"...) o a la banca, y lo guarda para todos.
+// Mueve a un jugador a una casilla ("slot:3") o a la banca. Si la casilla tenía a otro, se cambian de lugar.
 function moverJugador(id, zona) {
   if (!necesitaJugador()) return;
-  const al = alin() || { A: [], B: [], pos: {} };
-  const ahora = al.A.includes(id) ? 'A:' + al.pos[id] : al.B.includes(id) ? 'B:' + al.pos[id] : 'banca';
-  if (ahora === zona) { selJug = null; render(); return; } // ya estaba ahí
-  al.A = al.A.filter(x => x !== id); al.B = al.B.filter(x => x !== id);
-  if (zona === 'banca') delete al.pos[id];
-  else { const [k, p] = zona.split(':'); al[k].push(id); al.pos[id] = p; }
-  guardarAlin(!al.A.length ? null : { A: al.A, B: [], pos: al.pos }, null);
+  const al = alin() || { formacion: formElegida, slots: FORMACIONES[formElegida].map(() => null) };
+  const desde = al.slots.indexOf(id);
+  if (zona === 'banca') { if (desde < 0) { selJug = null; render(); return; } al.slots[desde] = null; }
+  else {
+    const i = +zona.split(':')[1]; if (!(i >= 0 && i < al.slots.length)) return;
+    if (i === desde) { selJug = null; render(); return; }
+    const otro = al.slots[i]; al.slots[i] = id;
+    if (desde >= 0) al.slots[desde] = otro; // si venía de otra casilla, el otro toma su lugar; si venía de la banca, el otro va a la banca
+  }
+  guardarAlin(al, null);
+}
+function cambiarFormacion(f) {
+  if (!FORMACIONES[f]) return;
+  const al = alin();
+  if (!al) { formElegida = f; render(); return; }
+  if (!necesitaJugador()) return;
+  guardarAlin({ formacion: f, slots: ubicar(f, titulares(al), posAlin(al)) }, null);
 }
 // Guarda los movimientos en orden (si mueves varios rápido, ninguno se pierde) y recién al final refresca.
 let alinPend, alinMsg = null, alinGuardando = false;
@@ -373,29 +414,29 @@ async function guardarAlinCola(d, msg) {
   alinMsg = null; refrescar();
 }
 function vAlineacion(al) {
-  const voy = new Set(S.anotados.map(a => a.id)), todos = al.A;
-  const sobran = todos.filter(id => !voy.has(id)), banca = suplentes(al);
-  const posDe = id => al.pos[id] || 'MED';
-  const jug = (id, enCancha) => `<button type="button" class="jug${enCancha ? ' a' : ''}${selJug === id ? ' sel' : ''}${sobran.includes(id) ? ' fuera' : ''}" data-jug="${esc(id)}">${esc(pName(id))}</button>`;
-  const zona = p => `<div class="zona" data-zona="A:${p}"><span class="zl">${POS_ICO[p]} ${POS[p]}</span>${todos.filter(id => posDe(id) === p).map(id => jug(id, true)).join('')}</div>`;
-  return `<div class="sec-h"><h2>Alineación</h2>${todos.length ? '<button class="btn pri" data-act="usar-equipos">Usar en el partido</button>' : ''}</div>
+  const f = al?.formacion || formElegida, forma = FORMACIONES[f], slots = al?.slots || forma.map(() => null);
+  const voy = new Set(S.anotados.map(a => a.id)), tit = slots.filter(Boolean);
+  const sobran = tit.filter(id => !voy.has(id)), banca = S.anotados.map(a => a.id).filter(id => pById(id) && !tit.includes(id));
+  const st = stats();
+  const carta = (id, p) => `<button type="button" class="jug carta${selJug === id ? ' sel' : ''}${sobran.includes(id) ? ' fuera' : ''}${id === SES.jugador ? ' yo' : ''}" data-jug="${esc(id)}">
+    <span class="c-nota num">${st[id]?.nota != null ? fmt1(st[id].nota) : '–'}</span><span class="c-pos">${POS_CORTO[p]}</span><span class="c-nom">${esc(pName(id))}</span></button>`;
+  const casilla = ([p, x, y], i) => `<div class="slot" data-zona="slot:${i}" style="left:${x}%;top:${y}%">${slots[i] ? carta(slots[i], p) : `<span class="vacio"><b>+</b>${POS_CORTO[p]}</span>`}</div>`;
+  const fmt = f[0];
+  return `<div class="sec-h"><h2>Alineación</h2>${tit.length ? '<button class="btn pri" data-act="usar-equipos">Usar en el partido</button>' : ''}</div>
+    <div class="row" style="gap:6px"><button class="chip" data-fmt="6" aria-pressed="${fmt === '6'}">Fútbol 6</button><button class="chip" data-fmt="5" aria-pressed="${fmt === '5'}">Fútbol 5</button>
+      <span class="muted small" style="margin-left:4px">Formación:</span>${Object.keys(FORMACIONES).filter(k => k[0] === fmt).map(k => `<button class="chip" data-form="${k}" aria-pressed="${k === f}">${k.slice(2)}</button>`).join('')}</div>
     ${sobran.length ? `<div class="note small">${esc(sobran.map(pName).join(', '))} ya no está${sobran.length > 1 ? 'n' : ''} anotado${sobran.length > 1 ? 's' : ''}. Llévalo${sobran.length > 1 ? 's' : ''} a la banca.</div>` : ''}
-    <div class="campo"><div class="mitad-h"><span>${NOSOTROS}</span><span class="num">${todos.length} en cancha · ${banca.length} en la banca${todos.length && !todos.some(id => posDe(id) === 'POR') ? ' · ⚠️ sin arquero' : ''}</span></div>
-      ${['DEL', 'MED', 'DEF', 'POR'].map(zona).join('')}<div class="arco"></div></div>
-    <div class="zona banca" data-zona="banca"><span class="zl">Suplentes · banca</span>${banca.map(id => jug(id, false)).join('') || '<span class="muted small">Arrastra aquí a los suplentes</span>'}</div>
-    <div class="row spread"><p class="muted small" style="margin:0">${selJug ? `Ahora toca dónde va <strong>${esc(pName(selJug))}</strong>.` : (todos.length ? 'Arrastra a cada jugador a su puesto, o tócalo y después toca dónde va. Los suplentes quedan en la banca.' : 'Toca "Ubicar a todos por su posición" o arrastra a cada uno desde la banca a su puesto.')}</p>${todos.length ? '<button class="btn" data-act="alin-borrar">Borrar alineación</button>' : ''}</div>`;
+    <div class="cancha2"><span class="ln-circulo"></span><span class="ln-area"></span><span class="ln-chica"></span><span class="ln-media-luna"></span><span class="ln-penal"></span>
+      ${forma.map(casilla).join('')}</div>
+    <div class="row spread small"><span><strong>${NOSOTROS}</strong> · ${tit.length} de ${forma.length} en cancha${tit.length && !slots[0] ? ' · ⚠️ falta el arquero' : ''}</span><span class="muted">El número es su nota promedio</span></div>
+    <div class="zona banca" data-zona="banca"><span class="zl">Suplentes · banca</span>${banca.map(id => `<button type="button" class="jug${selJug === id ? ' sel' : ''}" data-jug="${esc(id)}">${esc(pName(id))}</button>`).join('') || '<span class="muted small">Arrastra aquí a los suplentes</span>'}</div>
+    <div class="row spread"><p class="muted small" style="margin:0">${selJug ? `Ahora toca dónde va <strong>${esc(pName(selJug))}</strong> (si hay alguien, se cambian de lugar).` : (tit.length ? 'Arrastra a cada jugador a una casilla, o tócalo y después toca dónde va. Si la casilla tiene a alguien, se cambian. Los suplentes quedan en la banca.' : 'Toca "Ubicar a todos por su posición" o arrastra a cada uno desde la banca a una casilla.')}</p>${tit.length ? '<button class="btn" data-act="alin-borrar">Borrar alineación</button>' : ''}</div>`;
 }
-// Pone a todos los anotados en la cancha según la posición de su ficha (un solo arquero; el resto, a ajustar a mano).
+// Ubica a los anotados en la formación según la posición de su ficha; los que no caben quedan en la banca.
 function armar() {
   if (!necesitaJugador()) return;
-  const ids = S.anotados.map(a => a.id).filter(pById), pos = {};
-  let arquero = false;
-  for (const id of ids) {
-    const f = pById(id);
-    if (f.posicion === 'POR' && !arquero) { pos[id] = 'POR'; arquero = true; }
-    else pos[id] = (f.posicion === 'POR' ? f.posicion2 : f.posicion) || 'MED';
-  }
-  guardarAlin({ A: ids, B: [], pos }, 'Listo: cada uno en su posición. Mueve a los suplentes a la banca.');
+  const f = alin()?.formacion || formElegida;
+  guardarAlin({ formacion: f, slots: ubicar(f, S.anotados.map(a => a.id).filter(pById)) }, 'Listo: cada uno en su posición. Ajusta con el dedo si hace falta.');
 }
 
 /* ---------- hojas ---------- */
@@ -682,8 +723,16 @@ async function once(fn) { if (busy) return; busy = true; try { await fn(); } fin
 document.addEventListener('click', async e => {
   if (arrastre?.solto) { arrastre = null; return; } // el clic que sigue a soltar un arrastre
   const jz = e.target.closest('[data-jug],[data-zona]');
-  if (jz?.dataset.jug) { if (!selJug || selJug === jz.dataset.jug) { selJug = selJug ? null : jz.dataset.jug; render(); return; } }
-  if (jz && selJug) { const z = jz.closest('[data-zona]'); if (z) { moverJugador(selJug, z.dataset.zona); return; } }
+  if (jz?.dataset.jug) {
+    const otro = jz.dataset.jug;
+    if (!selJug || selJug === otro) { selJug = selJug ? null : otro; render(); return; }
+    const slots = alin()?.slots || [], en = id => slots.indexOf(id);
+    if (en(selJug) < 0 && en(otro) < 0) { selJug = otro; render(); return; } // los dos en la banca: cambia el elegido
+    if (en(otro) >= 0) moverJugador(selJug, 'slot:' + en(otro)); // a la casilla del otro (se cambian)
+    else moverJugador(otro, 'slot:' + en(selJug)); // titular elegido + suplente: entra el suplente
+    return;
+  }
+  if (jz && selJug) { moverJugador(selJug, jz.dataset.zona); return; }
   const t = e.target.closest('button,[data-player],[data-match]');
   if (armedDel && t !== armedDel) disarm();
   if (e.target.id === 'sheet') { closeSheet(); return; }
@@ -693,6 +742,8 @@ document.addEventListener('click', async e => {
   if (ds.sort) { S.sort = ds.sort; render(); return; }
   if (ds.rpos !== undefined) { S.rankPos = ds.rpos; render(); return; }
   if (ds.psort) { S.posSort = ds.psort; render(); return; }
+  if (ds.fmt) { const f = alin()?.formacion || formElegida; if (f[0] !== ds.fmt) cambiarFormacion(Object.keys(FORMACIONES).find(k => k[0] === ds.fmt)); return; }
+  if (ds.form) { if (ds.form !== (alin()?.formacion || formElegida)) cambiarFormacion(ds.form); return; }
   if (ds.elegir) { pedirPin(ds.elegir); return; }
   if (ds.voy) { if (!necesitaJugador()) return; const on = t.getAttribute('aria-pressed') === 'true'; once(() => accion('anotar', { p_player: ds.voy, p_voy: !on })); return; }
   if (ds.asig !== undefined && draft) {
@@ -730,7 +781,7 @@ document.addEventListener('click', async e => {
     case 'save-rates': once(saveRates); break;
     case 'edit-prox': if (necesitaJugador()) proxForm(); break;
     case 'armar': armar(); break;
-    case 'usar-equipos': { const al = alin(); if (al && necesitaJugador()) matchForm(null, { A: [...al.A, ...suplentes(al)], pos: al.pos }); } break;
+    case 'usar-equipos': { const al = alin(); if (al && necesitaJugador()) matchForm(null, { A: [...titulares(al), ...suplentes(al)], pos: posAlin(al) }); } break;
     case 'alin-borrar': if (necesitaJugador()) { if (armedDel !== t) { arm(t, '¿Borrar? Toca otra vez'); return; } disarm(); guardarAlin(null, 'Alineación borrada'); } break;
     case 'actualizar': location.reload(); break;
     case 'limpiar':
@@ -781,12 +832,12 @@ window.addEventListener('pointermove', e => {
   a.fantasma.style.left = e.clientX + 'px'; a.fantasma.style.top = e.clientY + 'px';
   if (e.clientY < 70) window.scrollBy(0, -14); else if (e.clientY > innerHeight - 70) window.scrollBy(0, 14); // la cancha no cabe entera en el celular
   const z = document.elementFromPoint(e.clientX, e.clientY)?.closest('[data-zona]');
-  document.querySelectorAll('.zona.drop').forEach(x => x !== z && x.classList.remove('drop')); z?.classList.add('drop');
+  document.querySelectorAll('[data-zona].drop').forEach(x => x !== z && x.classList.remove('drop')); z?.classList.add('drop');
 }, { passive: false });
 function terminarArrastre(e, soltar) {
   const a = arrastre; if (!a || a.solto || e.pointerId !== a.pid) return;
   if (!a.fantasma) { arrastre = null; return; } // fue un toque: lo maneja el clic
-  a.fantasma.remove(); a.el.classList.remove('origen'); document.querySelectorAll('.zona.drop').forEach(x => x.classList.remove('drop'));
+  a.fantasma.remove(); a.el.classList.remove('origen'); document.querySelectorAll('[data-zona].drop').forEach(x => x.classList.remove('drop'));
   a.solto = true; setTimeout(() => { if (arrastre === a) arrastre = null; }, 400);
   const z = soltar && document.elementFromPoint(e.clientX, e.clientY)?.closest('[data-zona]');
   if (z) moverJugador(a.id, z.dataset.zona); else render();

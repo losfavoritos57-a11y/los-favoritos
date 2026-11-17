@@ -193,19 +193,11 @@ td.hl{font-weight:700}
 .note.cta.nueva{border-color:var(--pitch)}
 /* ranking por puesto */
 .vistas{margin-bottom:-6px}
-/* alineación de la próxima: cancha con jugadores arrastrables */
-.campo{background:repeating-linear-gradient(180deg,var(--pitch) 0 44px,var(--pitch-2) 44px 88px);color:var(--on-pitch);border-radius:14px;padding:10px;border:2px solid var(--chalk)}
-.mitad-h{display:flex;justify-content:space-between;gap:8px;align-items:baseline;font-family:var(--f-display);text-transform:uppercase;font-size:18px;padding:2px 4px}
-.mitad-h .num{font-family:inherit;font-size:12px;text-transform:none;opacity:.85}
-.medio{border-top:2px solid var(--chalk);margin:10px 0;position:relative}
-.medio::after{content:'';position:absolute;left:50%;top:-22px;width:40px;height:40px;margin-left:-20px;border:2px solid var(--chalk);border-radius:50%}
 .zona{position:relative;min-height:54px;border:1px dashed var(--chalk);border-radius:10px;margin:6px 0;padding:16px 6px 6px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;justify-content:center}
 .zona .zl{position:absolute;left:8px;top:2px;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;opacity:.8}
 .zona.drop{background:rgba(255,255,255,.18);border-style:solid}
 .zona.banca{background:var(--surface-2);border-color:var(--line);color:var(--muted);margin-top:10px}
 .jug{touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;background:var(--surface);color:var(--ink);border:2px solid var(--line);border-radius:999px;padding:7px 12px;font-size:14px;font-weight:700;cursor:grab}
-.jug.a{border-color:var(--amarilla)}
-.jug.b{border-color:var(--on-pitch)}
 .jug.sel{outline:3px solid var(--amarilla);outline-offset:2px}
 .jug.fuera{opacity:.55;text-decoration:line-through}
 .jug.origen{opacity:.35}
@@ -213,4 +205,25 @@ td.hl{font-weight:700}
 .lbl3{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:4px}
 /* puesto en el formulario del partido */
 .possel{font-size:16px;border:1px solid var(--line);background:var(--surface);border-radius:6px;padding:3px 4px;margin-left:6px;vertical-align:middle}
-.arco{width:42%;height:12px;margin:8px auto 0;border:2px solid var(--chalk);border-top:0;border-radius:0 0 6px 6px}
+
+/* cancha de verdad con cartas tipo FIFA (nuestro arco abajo, la línea de arriba es el medio campo) */
+.cancha2{--linea:rgba(255,255,255,.62);position:relative;aspect-ratio:4/5;max-width:440px;margin:0 auto;width:100%;border-radius:10px;overflow:hidden;border:3px solid var(--linea);
+  background:repeating-linear-gradient(180deg,#2E8B4E 0 10%,#277A44 10% 20%);box-shadow:var(--shadow)}
+.cancha2 > span[class^="ln-"]{position:absolute;pointer-events:none;border:2px solid var(--linea)}
+.ln-circulo{left:50%;top:0;width:34%;aspect-ratio:1;border-radius:50%;transform:translate(-50%,-50%)}
+.ln-area{left:18%;width:64%;bottom:-2px;height:24%;border-bottom:0!important}
+.ln-chica{left:35%;width:30%;bottom:-2px;height:9%;border-bottom:0!important}
+.ln-media-luna{left:50%;bottom:24%;width:24%;aspect-ratio:1;border-radius:50%;transform:translate(-50%,50%);clip-path:inset(0 0 50% 0)}
+.ln-penal{left:50%;bottom:16%;width:6px;height:6px;border-radius:50%;background:var(--linea);border:0!important;transform:translateX(-50%)}
+.slot{position:absolute;transform:translate(-50%,-50%);z-index:1}
+.jug.carta{width:66px;min-height:86px;padding:5px 3px 6px;border:0;border-radius:9px 9px 16px 16px;display:flex;flex-direction:column;align-items:center;gap:1px;
+  background:linear-gradient(155deg,#FFF1B8 0%,#E8C25A 45%,#B98A2C 100%);color:#2B2006;box-shadow:0 4px 10px rgba(0,0,0,.35)}
+.jug.carta.yo{background:linear-gradient(155deg,#E9F7FF 0%,#8FC9EE 45%,#3F7FB0 100%);color:#0B2236}
+.c-nota{font-family:var(--f-display);font-size:24px;font-weight:800;line-height:1}
+.c-pos{font-size:10px;font-weight:800;letter-spacing:.08em}
+.c-nom{font-size:11px;font-weight:800;max-width:60px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-top:1px solid rgba(0,0,0,.25);padding-top:2px;margin-top:2px}
+.jug.carta.sel{outline:3px solid #fff;outline-offset:2px}
+.vacio{width:66px;height:86px;border:2px dashed var(--linea);border-radius:9px 9px 16px 16px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:800;letter-spacing:.06em;background:rgba(0,0,0,.12)}
+.vacio b{font-size:22px;line-height:1}
+.slot.drop .vacio,.slot.drop .carta{outline:3px solid #fff;outline-offset:2px}
+@media (max-width:360px){.jug.carta,.vacio{width:58px;min-height:78px;height:auto}.vacio{height:78px}.c-nom{max-width:52px}}

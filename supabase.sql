@@ -469,7 +469,7 @@ end $$;
 -- Guardar (o borrar con d = null) la alineación de la próxima pichanga: cualquier jugador con su PIN.
 create or replace function public.guardar_alineacion(a jsonb, d jsonb) returns jsonb
 language plpgsql security definer set search_path = public, extensions, pg_temp as $$
-declare au jsonb; ea uuid[]; eb uuid[]; ps jsonb := '{}'; k text; v text;
+declare au jsonb; ea uuid[]; eb uuid[]; ps jsonb := '{}'; k text; v text; f text; sl jsonb; n int;
 begin
   au := priv.auth(a, true);
   if not (au->>'ok')::boolean then return au; end if;
@@ -486,7 +486,22 @@ begin
   for k, v in select key, value from jsonb_each_text(coalesce(d->'pos', '{}')) loop
     if v in ('POR', 'DEF', 'MED', 'DEL') and k::uuid = any(ea || eb) then ps := ps || jsonb_build_object(k, v); end if;
   end loop;
-  insert into public.proxima (id, alineacion) values (1, jsonb_build_object('A', to_jsonb(ea), 'B', to_jsonb(eb), 'pos', ps))
+  -- Formación (fútbol 6 o fútbol 5) y en qué casilla de la cancha va cada titular (null = vacía).
+  if d ? 'formacion' then
+    f := d->>'formacion';
+    if f not in ('6:2-2-1', '6:2-1-2', '6:1-2-2', '6:3-1-1', '5:2-1-1', '5:1-2-1', '5:2-2') then
+      return jsonb_build_object('ok', false, 'error', 'datos');
+    end if;
+    sl := d->'slots'; n := left(f, 1)::int; -- 6 o 5 casillas
+    if jsonb_typeof(sl) is distinct from 'array' then return jsonb_build_object('ok', false, 'error', 'datos'); end if;
+    if jsonb_array_length(sl) <> n
+      or (select count(x.v) from jsonb_array_elements_text(sl) x(v)) <> cardinality(ea)
+      or (select count(distinct x.v) from jsonb_array_elements_text(sl) x(v)) <> cardinality(ea)
+      or exists (select 1 from jsonb_array_elements_text(sl) x(v) where x.v is not null and not (x.v::uuid = any(ea))) then
+      return jsonb_build_object('ok', false, 'error', 'datos');
+    end if;
+  end if;
+  insert into public.proxima (id, alineacion) values (1, jsonb_build_object('A', to_jsonb(ea), 'B', to_jsonb(eb), 'pos', ps, 'formacion', f, 'slots', sl))
   on conflict (id) do update set alineacion = excluded.alineacion;
   return jsonb_build_object('ok', true);
 exception when invalid_text_representation then
