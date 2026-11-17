@@ -1,6 +1,6 @@
 import { CONFIG } from './config.js';
 
-const VERSION = 'v9'; // subirla junto con CACHE en sw.js y version.json en cada publicación
+const VERSION = 'v10'; // subirla junto con CACHE en sw.js y version.json en cada publicación
 const POS = { POR: 'Arquero', DEF: 'Defensa', MED: 'Volante', DEL: 'Delantero' };
 const POS_ICO = { POR: '🧤', DEF: '🛡️', MED: '⚙️', DEL: '⚽' };
 const POS_CORTO = { POR: 'Arq', DEF: 'Def', MED: 'Vol', DEL: 'Del' };
@@ -71,7 +71,7 @@ async function accion(fn, args, okMsg) {
   return r;
 }
 async function refrescar() {
-  if (!SES.grupo) return;
+  if (!SES.grupo || alinGuardando) return;
   let r;
   try { r = await rpc('estado', { a: { grupo: SES.grupo, jugador: SES.jugador || '', pin: SES.pin || '' } }); }
   catch { S.sinRed = true; render(); return; }
@@ -197,6 +197,7 @@ function vGrupo() {
 
 /* ---------- render principal ---------- */
 function render() {
+  if (arrastre?.fantasma && !arrastre.solto) return;
   const enApp = S.pantalla === 'app';
   $('#nav').hidden = !enApp; $('#prox-band').hidden = !enApp; $('#btn-cuenta').hidden = !enApp;
   const main = $('#main');
@@ -332,27 +333,54 @@ function alin() {
   const x = S.proxima?.alineacion;
   if (!x || !Array.isArray(x.A) || !Array.isArray(x.B)) return null;
   const A = x.A.filter(pById), B = x.B.filter(pById);
-  return A.length || B.length ? { A, B, pos: { ...(x.pos || {}) } } : null;
+  if (!A.length && !B.length) return null;
+  const pos = { ...(x.pos || {}) }; [...A, ...B].forEach(id => pos[id] ||= 'MED'); // sin puesto se dibuja de volante
+  return { A, B, pos };
 }
-const guardarAlin = (d, msg) => once(async () => { if (await accion('guardar_alineacion', { d }, msg)) closeSheet(); });
-function alinSheet(id) {
-  const al = alin(); if (!al) return;
-  const k = al.A.includes(id) ? 'A' : al.B.includes(id) ? 'B' : '', otro = k === 'A' ? 'B' : 'A', cur = al.pos[id] || '';
-  openSheet(`<h2>${esc(pName(id))}</h2><div class="small" style="opacity:.85">${k ? TEAM[k] : 'Todavía sin equipo'}</div>`, `<div class="stack">
-    ${k ? `<div><div class="lbl2">Puesto en este partido</div><div class="row" style="gap:6px;margin-top:6px">${Object.keys(POS).map(p => `<button class="chip" data-alpos="${p}" data-id="${esc(id)}" aria-pressed="${cur === p}">${POS_ICO[p]} ${POS[p]}</button>`).join('')}</div></div>
-    <div class="row"><button class="btn" data-act="alin-cambiar" data-id="${esc(id)}">Pasar a ${TEAM[otro]}</button><button class="btn warn" data-act="alin-sacar" data-id="${esc(id)}">Sacar de la alineación</button></div>`
-    : `<div class="row"><button class="btn" data-act="alin-poner" data-k="A" data-id="${esc(id)}">Poner en ${TEAM.A}</button><button class="btn" data-act="alin-poner" data-k="B" data-id="${esc(id)}">Poner en ${TEAM.B}</button></div>`}</div>`, { type: 'alin', id });
+let selJug = null, arrastre = null; // jugador elegido con un toque / arrastre en curso en la cancha
+function guardarAlin(d, msg) {
+  selJug = null;
+  S.proxima = { ...(S.proxima || {}), alineacion: d }; render(); // se ve al tiro; después se guarda
+  guardarAlinCola(d, msg);
+}
+// Mueve a un jugador a una zona de la cancha ("A:DEF", "B:POR"...) o a la banca, y lo guarda para todos.
+function moverJugador(id, zona) {
+  if (!necesitaJugador()) return;
+  const al = alin() || { A: [], B: [], pos: {} };
+  const ahora = al.A.includes(id) ? 'A:' + al.pos[id] : al.B.includes(id) ? 'B:' + al.pos[id] : 'banca';
+  if (ahora === zona) { selJug = null; render(); return; } // ya estaba ahí
+  al.A = al.A.filter(x => x !== id); al.B = al.B.filter(x => x !== id);
+  if (zona === 'banca') delete al.pos[id];
+  else { const [k, p] = zona.split(':'); al[k].push(id); al.pos[id] = p; }
+  guardarAlin(!al.A.length && !al.B.length ? null : al, null);
+}
+// Guarda los movimientos en orden (si mueves varios rápido, ninguno se pierde) y recién al final refresca.
+let alinPend, alinMsg = null, alinGuardando = false;
+async function guardarAlinCola(d, msg) {
+  alinPend = d; alinMsg = msg || null; if (alinGuardando) return; alinGuardando = true;
+  let bien = true;
+  try {
+    while (alinPend !== undefined) {
+      const x = alinPend; alinPend = undefined; let r;
+      try { r = await rpc('guardar_alineacion', { a: auth(), d: x }); } catch { toast('Sin conexión. No se guardó el cambio.'); bien = false; break; }
+      if (!r.ok) { manejarError(r.error); bien = false; break; }
+    }
+  } finally { alinGuardando = false; alinPend = undefined; }
+  if (bien && alinMsg) toast(alinMsg);
+  alinMsg = null; refrescar();
 }
 function vAlineacion(al) {
   const st = stats(), voy = new Set(S.anotados.map(a => a.id)), todos = [...al.A, ...al.B];
-  const cambio = todos.length !== voy.size || todos.some(id => !voy.has(id));
-  const linea = (ids, p) => { const xs = ids.filter(id => (al.pos[id] || '') === p); if (!xs.length) return '';
-    return `<div class="linea"><div class="lbl3">${p ? POS_ICO[p] + ' ' + POS[p] : 'Sin puesto'}</div><div class="row" style="gap:6px">${xs.map(id => `<button class="chip" data-alin="${esc(id)}">${esc(pName(id))}</button>`).join('')}</div></div>`; };
+  const sobran = todos.filter(id => !voy.has(id)), banca = [...voy].filter(id => pById(id) && !todos.includes(id));
+  const posDe = id => al.pos[id] || 'MED';
+  const jug = (id, k) => `<button type="button" class="jug${k ? ' ' + k.toLowerCase() : ''}${selJug === id ? ' sel' : ''}${sobran.includes(id) ? ' fuera' : ''}" data-jug="${esc(id)}">${esc(pName(id))}</button>`;
+  const zona = (k, p) => `<div class="zona" data-zona="${k}:${p}"><span class="zl">${POS_ICO[p]} ${POS_CORTO[p]}</span>${al[k].filter(id => posDe(id) === p).map(id => jug(id, k)).join('')}</div>`;
+  const cab = k => `<div class="mitad-h"><span>${TEAM[k]}</span><span class="num">${al[k].length} · nota ${fmt1(al[k].reduce((t, id) => t + fuerza(st, id), 0) / (al[k].length || 1))}${al[k].some(id => posDe(id) === 'POR') ? '' : ' · ⚠️ sin arquero'}</span></div>`;
   return `<div class="sec-h"><h2>Alineación</h2><button class="btn pri" data-act="usar-equipos">Usar en el partido</button></div>
-    ${cambio ? '<div class="note small">La lista de anotados cambió desde que se armó. Toca "Armar de nuevo" o ajusta a mano.</div>' : ''}
-    ${(f => f.length ? `<div class="linea"><div class="lbl3">Por ubicar</div><div class="row" style="gap:6px">${f.map(id => `<button class="chip" data-alin="${esc(id)}">${esc(pName(id))}</button>`).join('')}</div></div>` : '')([...voy].filter(id => pById(id) && !todos.includes(id)))}
-    <div class="teams">${['A', 'B'].map(k => { const ids = al[k], fz = ids.reduce((t, id) => t + fuerza(st, id), 0); return `<div class="team cancha"><h3><span>${TEAM[k]}</span><span class="num muted">${fmt1(fz / (ids.length || 1))}</span></h3>${ids.some(id => al.pos[id] === 'POR') ? '' : '<p class="small" style="margin:8px 0 0">⚠️ Falta el arquero</p>'}${['POR', 'DEF', 'MED', 'DEL', ''].map(p => linea(ids, p)).join('')}</div>`; }).join('')}</div>
-    <div class="row spread"><p class="muted small" style="margin:0">Toca a un jugador para cambiar su puesto o pasarlo al otro equipo. El número es el promedio de notas del equipo.</p><button class="btn" data-act="alin-borrar">Borrar alineación</button></div>`;
+    ${sobran.length ? `<div class="note small">${esc(sobran.map(pName).join(', '))} ya no está${sobran.length > 1 ? 'n' : ''} anotado${sobran.length > 1 ? 's' : ''}. Llévalo${sobran.length > 1 ? 's' : ''} a la banca o toca "Armar de nuevo".</div>` : ''}
+    <div class="campo">${cab('A')}${['POR', 'DEF', 'MED', 'DEL'].map(p => zona('A', p)).join('')}<div class="medio"></div>${['DEL', 'MED', 'DEF', 'POR'].map(p => zona('B', p)).join('')}${cab('B')}</div>
+    <div class="zona banca" data-zona="banca"><span class="zl">Banca · por ubicar</span>${banca.map(id => jug(id, '')).join('') || '<span class="muted small">Arrastra aquí a quien no juega</span>'}</div>
+    <div class="row spread"><p class="muted small" style="margin:0">${selJug ? `Ahora toca dónde va <strong>${esc(pName(selJug))}</strong>.` : 'Arrastra a cada jugador a su puesto, o tócalo y después toca dónde va. Para sacarlo, llévalo a la banca.'}</p><button class="btn" data-act="alin-borrar">Borrar alineación</button></div>`;
 }
 function armar() {
   if (!necesitaJugador()) return;
@@ -649,6 +677,10 @@ function arm(t, msg) { disarm(); armedDel = t; armedTxt = t.textContent; t.class
 async function once(fn) { if (busy) return; busy = true; try { await fn(); } finally { busy = false; } }
 
 document.addEventListener('click', async e => {
+  if (arrastre?.solto) { arrastre = null; return; } // el clic que sigue a soltar un arrastre
+  const jz = e.target.closest('[data-jug],[data-zona]');
+  if (jz?.dataset.jug) { if (!selJug || selJug === jz.dataset.jug) { selJug = selJug ? null : jz.dataset.jug; render(); return; } }
+  if (jz && selJug) { const z = jz.closest('[data-zona]'); if (z) { moverJugador(selJug, z.dataset.zona); return; } }
   const t = e.target.closest('button,[data-player],[data-match]');
   if (armedDel && t !== armedDel) disarm();
   if (e.target.id === 'sheet') { closeSheet(); return; }
@@ -658,8 +690,6 @@ document.addEventListener('click', async e => {
   if (ds.sort) { S.sort = ds.sort; render(); return; }
   if (ds.rpos !== undefined) { S.rankPos = ds.rpos; render(); return; }
   if (ds.psort) { S.posSort = ds.psort; render(); return; }
-  if (ds.alin) { if (necesitaJugador()) alinSheet(ds.alin); return; }
-  if (ds.alpos) { const al = alin(); if (!al || !necesitaJugador()) return; al.pos[ds.id] = ds.alpos; guardarAlin(al, POS[ds.alpos] + ': ' + pName(ds.id)); return; }
   if (ds.elegir) { pedirPin(ds.elegir); return; }
   if (ds.voy) { if (!necesitaJugador()) return; const on = t.getAttribute('aria-pressed') === 'true'; once(() => accion('anotar', { p_player: ds.voy, p_voy: !on })); return; }
   if (ds.asig !== undefined && draft) {
@@ -699,16 +729,6 @@ document.addEventListener('click', async e => {
     case 'armar': armar(); break;
     case 'usar-equipos': { const al = alin(); if (al && necesitaJugador()) matchForm(null, al); } break;
     case 'alin-borrar': if (necesitaJugador()) { if (armedDel !== t) { arm(t, '¿Borrar? Toca otra vez'); return; } disarm(); guardarAlin(null, 'Alineación borrada'); } break;
-    case 'alin-poner': {
-      const al = alin(); if (!al || !necesitaJugador()) break;
-      al[ds.k].push(ds.id); const p = pById(ds.id)?.posicion; if (p) al.pos[ds.id] = p;
-      guardarAlin(al, pName(ds.id) + ' a ' + TEAM[ds.k]); } break;
-    case 'alin-cambiar': case 'alin-sacar': {
-      const al = alin(); if (!al || !necesitaJugador()) break;
-      const k = al.A.includes(ds.id) ? 'A' : 'B', otro = k === 'A' ? 'B' : 'A';
-      al[k] = al[k].filter(x => x !== ds.id);
-      if (ds.act === 'alin-cambiar') al[otro].push(ds.id); else delete al.pos[ds.id];
-      guardarAlin(al, ds.act === 'alin-cambiar' ? 'Cambiado de equipo' : 'Sacado de la alineación'); } break;
     case 'actualizar': location.reload(); break;
     case 'limpiar':
       if (!necesitaJugador()) return;
@@ -736,6 +756,35 @@ document.addEventListener('submit', async e => {
   else if (id === 'f-grupo') once(entrarGrupo);
   else if (id === 'f-setup') once(configurar);
 });
+document.addEventListener('pointerdown', e => {
+  if (arrastre?.solto) arrastre = null;
+  if (arrastre) return; // otro dedo mientras se arrastra
+  const j = e.target.closest('[data-jug]'); if (!j || e.button > 0) return;
+  arrastre = { id: j.dataset.jug, x: e.clientX, y: e.clientY, el: j, pid: e.pointerId, fantasma: null };
+});
+window.addEventListener('pointermove', e => {
+  const a = arrastre; if (!a || a.solto || e.pointerId !== a.pid) return;
+  if (!a.fantasma) {
+    if (Math.hypot(e.clientX - a.x, e.clientY - a.y) < 8) return;
+    a.fantasma = a.el.cloneNode(true); a.fantasma.classList.add('fantasma'); document.body.appendChild(a.fantasma); a.el.classList.add('origen');
+  }
+  e.preventDefault();
+  a.fantasma.style.left = e.clientX + 'px'; a.fantasma.style.top = e.clientY + 'px';
+  if (e.clientY < 70) window.scrollBy(0, -14); else if (e.clientY > innerHeight - 70) window.scrollBy(0, 14); // la cancha no cabe entera en el celular
+  const z = document.elementFromPoint(e.clientX, e.clientY)?.closest('[data-zona]');
+  document.querySelectorAll('.zona.drop').forEach(x => x !== z && x.classList.remove('drop')); z?.classList.add('drop');
+}, { passive: false });
+function terminarArrastre(e, soltar) {
+  const a = arrastre; if (!a || a.solto || e.pointerId !== a.pid) return;
+  if (!a.fantasma) { arrastre = null; return; } // fue un toque: lo maneja el clic
+  a.fantasma.remove(); a.el.classList.remove('origen'); document.querySelectorAll('.zona.drop').forEach(x => x.classList.remove('drop'));
+  a.solto = true; setTimeout(() => { if (arrastre === a) arrastre = null; }, 400);
+  const z = soltar && document.elementFromPoint(e.clientX, e.clientY)?.closest('[data-zona]');
+  if (z) moverJugador(a.id, z.dataset.zona); else render();
+}
+window.addEventListener('pointerup', e => terminarArrastre(e, true));
+document.addEventListener('contextmenu', e => { if (e.target.closest('[data-jug]')) e.preventDefault(); });
+window.addEventListener('pointercancel', e => terminarArrastre(e, false));
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$('#sheet').hidden) closeSheet(); });
 
 async function entrarGrupo() {

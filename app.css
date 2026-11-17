@@ -193,8 +193,23 @@ td.hl{font-weight:700}
 .note.cta.nueva{border-color:var(--pitch)}
 /* ranking por puesto */
 .vistas{margin-bottom:-6px}
-/* alineación de la próxima */
-.cancha .linea{margin-top:10px}
+/* alineación de la próxima: cancha con jugadores arrastrables */
+.campo{background:repeating-linear-gradient(180deg,var(--pitch) 0 44px,var(--pitch-2) 44px 88px);color:var(--on-pitch);border-radius:14px;padding:10px;border:2px solid var(--chalk)}
+.mitad-h{display:flex;justify-content:space-between;gap:8px;align-items:baseline;font-family:var(--f-display);text-transform:uppercase;font-size:18px;padding:2px 4px}
+.mitad-h .num{font-family:inherit;font-size:12px;text-transform:none;opacity:.85}
+.medio{border-top:2px solid var(--chalk);margin:10px 0;position:relative}
+.medio::after{content:'';position:absolute;left:50%;top:-22px;width:40px;height:40px;margin-left:-20px;border:2px solid var(--chalk);border-radius:50%}
+.zona{position:relative;min-height:54px;border:1px dashed var(--chalk);border-radius:10px;margin:6px 0;padding:16px 6px 6px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;justify-content:center}
+.zona .zl{position:absolute;left:8px;top:2px;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;opacity:.8}
+.zona.drop{background:rgba(255,255,255,.18);border-style:solid}
+.zona.banca{background:var(--surface-2);border-color:var(--line);color:var(--muted);margin-top:10px}
+.jug{touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;background:var(--surface);color:var(--ink);border:2px solid var(--line);border-radius:999px;padding:7px 12px;font-size:14px;font-weight:700;cursor:grab}
+.jug.a{border-color:var(--amarilla)}
+.jug.b{border-color:var(--on-pitch)}
+.jug.sel{outline:3px solid var(--amarilla);outline-offset:2px}
+.jug.fuera{opacity:.55;text-decoration:line-through}
+.jug.origen{opacity:.35}
+.jug.fantasma{position:fixed;z-index:80;pointer-events:none;transform:translate(-50%,-60%) scale(1.08);box-shadow:var(--shadow)}
 .lbl3{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:4px}
 /* puesto en el formulario del partido */
 .possel{font-size:16px;border:1px solid var(--line);background:var(--surface);border-radius:6px;padding:3px 4px;margin-left:6px;vertical-align:middle}
