@@ -1,6 +1,6 @@
 import { CONFIG } from './config.js';
 
-const VERSION = 'v8'; // subirla junto con CACHE en sw.js y version.json en cada publicación
+const VERSION = 'v9'; // subirla junto con CACHE en sw.js y version.json en cada publicación
 const POS = { POR: 'Arquero', DEF: 'Defensa', MED: 'Volante', DEL: 'Delantero' };
 const POS_ICO = { POR: '🧤', DEF: '🛡️', MED: '⚙️', DEL: '⚽' };
 const POS_CORTO = { POR: 'Arq', DEF: 'Def', MED: 'Vol', DEL: 'Del' };
@@ -105,13 +105,16 @@ function toast(msg) { const t = $('#toast'); t.textContent = msg; t.hidden = fal
 /* ---------- estadísticas ---------- */
 const byFecha = (a, b) => (a.fecha || '').localeCompare(b.fecha || '') || (a.creado || 0) - (b.creado || 0);
 function jugo(mid, id) { const m = S.matches.find(x => x.id === mid); return !!m && ((m.equipoA || []).includes(id) || (m.equipoB || []).includes(id)); }
-// Gato del partido (antes "figura"): lo votan los que jugaron. Gana el más votado (si empatan, todos). Partidos viejos usan la elegida al cargarlos.
+// Gato del partido: el de mejor nota promedio en ese partido (aparece cuando lo califican al menos 3).
+// Si empatan en nota, gana quien sumó más goles + asistencias; si siguen empatados, son gatos todos.
+// Los partidos sin notas usan el elegido al cargarlos (versiones viejas).
 function figuras(m) {
-  const votos = {};
-  for (const f of S.figuraRes) if (f.matchId === m.id) votos[f.id] = +f.votos || 0;
-  const max = Math.max(0, ...Object.values(votos));
-  if (!max) return { ids: m.mvp ? [m.mvp] : [], votos };
-  return { ids: Object.keys(votos).filter(id => votos[id] === max), votos };
+  const np = notasPartido(m.id), ids = Object.keys(np).filter(pById);
+  if (!ids.length) return { ids: m.mvp ? [m.mvp] : [] };
+  const k = id => [Math.round(np[id].avg * 100), (+m.goles?.[id] || 0) + (+m.asist?.[id] || 0)];
+  const mejor = (x, y) => x[0] - y[0] || x[1] - y[1];
+  const top = ids.map(k).reduce((a, b) => mejor(a, b) >= 0 ? a : b);
+  return { ids: ids.filter(id => mejor(k(id), top) === 0) };
 }
 function respaldoViejo() {
   let t = 0; try { t = +localStorage.getItem('favoritos-ultimo-respaldo') || 0; } catch {}
@@ -279,7 +282,7 @@ function vRanking() {
     <td class="l">${forma(s.forma)}</td></tr>`).join('');
   return `${vistasRank()}${pod}
   <div class="sec-h"><h2>Tabla</h2><div class="row">${sortBtns}</div></div>
-  <div class="tbl-wrap"><table><thead><tr><th>#</th><th class="l">Jugador</th><th title="Partidos jugados">PJ</th><th title="Ganados-Empatados-Perdidos">G-E-P</th><th>Pts</th><th title="Puntos obtenidos sobre los posibles">Rend.</th><th>Goles</th><th>Asist.</th><th title="Promedio de las notas que le pusieron">Nota</th><th title="Veces elegido gato del partido">Gatos</th><th class="l">Últimos 5</th></tr></thead><tbody>${rows}</tbody></table></div>
+  <div class="tbl-wrap"><table><thead><tr><th>#</th><th class="l">Jugador</th><th title="Partidos jugados">PJ</th><th title="Ganados-Empatados-Perdidos">G-E-P</th><th>Pts</th><th title="Puntos obtenidos sobre los posibles">Rend.</th><th>Goles</th><th>Asist.</th><th title="Promedio de las notas que le pusieron">Nota</th><th title="Veces que fue el de mejor nota del partido">Gatos</th><th class="l">Últimos 5</th></tr></thead><tbody>${rows}</tbody></table></div>
   <p class="muted small">Ganar vale 3 puntos y empatar 1. Las notas van del 1 al 10, las ponen los demás después de cada partido y nadie se pone nota a sí mismo.</p>`;
 }
 function emptyPlayers() {
@@ -592,38 +595,34 @@ async function saveMatch() {
 }
 
 /* detalle de partido + notas */
-let myRates = {}, myFigura = '', rateCtx = null;
+let myRates = {}, rateCtx = null;
 function matchSheet(id) {
   const m = S.matches.find(x => x.id === id); if (!m) return;
   const a = +m.golesA || 0, b = +m.golesB || 0, np = notasPartido(id), me = myPlayer();
   const mine = me ? S.misVotos.find(n => n.matchId === id) : null;
   const nv = +S.votantes[id] || 0;
   const fig = figuras(m);
-  const team = (k, ids) => `<div class="team"><h3><span>${TEAM[k]}</span><span class="num">${k === 'A' ? a : b}</span></h3><ul>${ids.map(pid => `<li><span>${esc(pName(pid))}${fig.ids.includes(pid) ? ' <span class="me-tag">🐱 GATO</span>' : ''}${fig.votos[pid] ? ` <span class="small muted">(${fig.votos[pid]} ${fig.votos[pid] === 1 ? 'voto' : 'votos'})</span>` : ''}</span><span class="small muted num">${+m.goles?.[pid] ? m.goles[pid] + ' G ' : ''}${+m.asist?.[pid] ? m.asist[pid] + ' A ' : ''}${np[pid] ? `<span class="badge-n">${fmt1(np[pid].avg)}</span>` : ''}</span></li>`).join('')}</ul></div>`;
+  const team = (k, ids) => `<div class="team"><h3><span>${TEAM[k]}</span><span class="num">${k === 'A' ? a : b}</span></h3><ul>${ids.map(pid => `<li><span>${esc(pName(pid))}${fig.ids.includes(pid) ? ' <span class="me-tag">🐱 GATO</span>' : ''}</span><span class="small muted num">${+m.goles?.[pid] ? m.goles[pid] + ' G ' : ''}${+m.asist?.[pid] ? m.asist[pid] + ' A ' : ''}${np[pid] ? `<span class="badge-n">${fmt1(np[pid].avg)}</span>` : ''}</span></li>`).join('')}</ul></div>`;
   const votables = [...(m.equipoA || []), ...(m.equipoB || [])].filter(pid => pById(pid) && pid !== me?.id);
   myRates = Object.fromEntries(Object.entries(mine?.notas || {}).filter(([pid]) => votables.includes(pid)));
-  myFigura = votables.includes(mine?.figura) ? mine.figura : '';
   rateCtx = { mid: id, votables, existia: !!mine };
   const rateRows = votables.map(pid => `<div class="prow"><span class="nm">${esc(pName(pid))}</span><span class="rate">${[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => `<button type="button" data-rate="${n}" data-id="${esc(pid)}" aria-pressed="${+myRates[pid] === n}">${n}</button>`).join('')}</span></div>`).join('');
   openSheet(`<h2 class="num">${a} – ${b}</h2><div class="small" style="opacity:.85">${esc(fmtFecha(m.fecha, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }))}${m.lugar ? ' · ' + esc(m.lugar) : ''}</div>`, `
    <div class="teams">${team('A', m.equipoA || [])}${team('B', m.equipoB || [])}</div>
-   <p class="muted small" style="margin:0">Votaron ${nv}. Los votos son secretos: la nota de cada uno (el número amarillo) aparece cuando lo califican al menos ${S.minVotos}, y el gato del partido cuando lo votan al menos ${S.minVotos}. Así nadie puede adivinar qué puso otro.</p>
+   <p class="muted small" style="margin:0">Votaron ${nv}. Los votos son secretos: la nota de cada uno (el número amarillo) aparece cuando lo califican al menos ${S.minVotos}, así nadie puede adivinar qué puso otro. 🐱 El gato del partido es el de mejor nota.</p>
    ${me && S.errorJugador === 'bloqueado' ? `<div class="note small">Tu PIN quedó bloqueado unos minutos por intentos fallidos. Vuelve a abrir el partido más rato para votar.</div>`
-    : me && !jugo(id, me.id) ? `<div class="note small">Solo ponen notas y votan el gato los que jugaron este partido.</div>`
-    : me ? `<div><div class="lbl2">Tus notas${mine ? ' (ya votaste, puedes cambiar tu voto)' : ''}</div><p class="muted small" style="margin:2px 0 4px">Del 1 al 10. Tu nota es una más en el promedio. A ti no te aparece: nadie se pone nota a sí mismo.</p>${rateRows || '<p class="muted">No hay a quién ponerle nota.</p>'}
-     ${votables.length ? `<div class="lbl2" style="margin-top:14px">Tu gato del partido 🐱</div><p class="muted small" style="margin:2px 0 6px">Gana el más votado. No puedes votarte a ti mismo.</p>
-     <div class="row figs" style="gap:6px">${votables.map(pid => `<button type="button" class="chip" data-fig="${esc(pid)}" aria-pressed="${myFigura === pid}">${esc(pName(pid))}</button>`).join('')}</div>` : ''}
-     <div class="row" style="justify-content:flex-end;margin-top:8px"><button class="btn pri" data-act="save-rates">Guardar mi voto</button></div></div>`
-    : `<div class="note cta small"><span>Para poner notas y votar el gato, primero elige tu jugador.</span><button class="btn pri" data-act="quien">Elegir</button></div>`}
+    : me && !jugo(id, me.id) ? `<div class="note small">Solo ponen notas los que jugaron este partido.</div>`
+    : me ? `<div><div class="lbl2">Tus notas${mine ? ' (ya votaste, puedes cambiarlas)' : ''}</div><p class="muted small" style="margin:2px 0 4px">Del 1 al 10. Tu nota es una más en el promedio. A ti no te aparece: nadie se pone nota a sí mismo.</p>${rateRows || '<p class="muted">No hay a quién ponerle nota.</p>'}
+     <div class="row" style="justify-content:flex-end;margin-top:8px"><button class="btn pri" data-act="save-rates">Guardar mis notas</button></div></div>`
+    : `<div class="note cta small"><span>Para poner notas, primero elige tu jugador.</span><button class="btn pri" data-act="quien">Elegir</button></div>`}
    <div class="row"><button class="btn" data-act="edit-match" data-id="${esc(id)}">Editar partido</button></div>`, { type: 'mview', id });
 }
 async function saveRates() {
   if (!myPlayer()) { quienEres(); return; }
   const notas = Object.fromEntries(Object.entries(myRates).filter(([pid, n]) => +n >= 1 && +n <= 10 && rateCtx.votables.includes(pid)));
-  const figura = rateCtx.votables.includes(myFigura) ? myFigura : null;
-  const vacio = !Object.keys(notas).length && !figura;
-  if (vacio && !rateCtx.existia) { toast('Pon al menos una nota o elige tu gato'); return; }
-  const r = await accion('votar', { p_match: rateCtx.mid, p_notas: notas, p_figura: figura }, vacio ? 'Borraste tu voto de este partido' : 'Voto guardado');
+  const vacio = !Object.keys(notas).length;
+  if (vacio && !rateCtx.existia) { toast('Pon al menos una nota'); return; }
+  const r = await accion('votar', { p_match: rateCtx.mid, p_notas: notas }, vacio ? 'Borraste tus notas de este partido' : 'Notas guardadas');
   if (r) closeSheet();
 }
 
@@ -670,7 +669,6 @@ document.addEventListener('click', async e => {
     syncScore(); renderMatchForm(); return;
   }
   if (ds.st && draft) { keepInputs(); const o = draft[ds.st]; o[ds.id] = Math.max(0, (+o[ds.id] || 0) + (+ds.d)); if (ds.st === 'goles') syncScore(); renderMatchForm(); return; }
-  if (ds.fig) { myFigura = myFigura === ds.fig ? '' : ds.fig; t.closest('.figs').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.fig === myFigura))); return; }
   if (ds.rate) { const cur = +myRates[ds.id]; myRates[ds.id] = cur === +ds.rate ? 0 : +ds.rate; t.closest('.rate').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.rate === myRates[ds.id]))); return; }
   if (ds.player && !ds.act) { playerSheet(ds.player); return; }
   if (ds.match) { matchSheet(ds.match); return; }
