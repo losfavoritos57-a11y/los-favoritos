@@ -50,6 +50,12 @@ create table if not exists public.matches (
 alter table public.matches add column if not exists borrado timestamptz;
 -- Dónde jugó más cada uno ese día: {jugador: 'POR'|'DEF'|'MED'|'DEL'}. Si falta, se usa el de su ficha.
 alter table public.matches add column if not exists posiciones jsonb not null default '{}';
+-- Los Favoritos juegan contra otro equipo: equipo_a son los nuestros, goles_a nuestros goles,
+-- goles_b los del rival y equipo_b queda vacío. Nombre del rival opcional.
+alter table public.matches add column if not exists rival text not null default '' check (char_length(rival) <= 40);
+-- Los partidos de prueba del formato viejo (Con peto vs Sin peto) se borran. En el formato nuevo
+-- equipo_b siempre está vacío, así que volver a correr este archivo no borra partidos reales.
+delete from public.matches where cardinality(equipo_b) > 0;
 
 create table if not exists public.notas (
   match_id uuid not null references public.matches(id) on delete cascade,
@@ -75,6 +81,8 @@ create table if not exists public.proxima (
 );
 -- Equipos y puestos armados para la próxima pichanga: {A: [ids], B: [ids], pos: {id: 'POR'|...}}.
 alter table public.proxima add column if not exists alineacion jsonb;
+-- Alineación del formato viejo (dos equipos): se descarta. En el nuevo solo hay titulares (A).
+update public.proxima set alineacion = null where jsonb_array_length(coalesce(alineacion->'B', '[]')) > 0;
 
 create table if not exists public.intentos (
   clave text primary key,
@@ -238,7 +246,7 @@ begin
       from public.players), '[]'),
     'matches', coalesce((select jsonb_agg(jsonb_build_object('id', id, 'fecha', fecha, 'lugar', lugar,
         'equipoA', to_jsonb(equipo_a), 'equipoB', to_jsonb(equipo_b), 'golesA', goles_a, 'golesB', goles_b,
-        'goles', goles, 'asist', asist, 'mvp', mvp, 'posiciones', posiciones, 'creado', extract(epoch from creado) * 1000))
+        'goles', goles, 'asist', asist, 'mvp', mvp, 'posiciones', posiciones, 'rival', rival, 'creado', extract(epoch from creado) * 1000))
       from public.matches where borrado is null), '[]'),
     'anotados', coalesce((select jsonb_agg(jsonb_build_object('id', player_id)) from public.anotados), '[]'),
     'proxima', (select jsonb_build_object('fecha', fecha, 'hora', hora, 'lugar', lugar, 'cupos', cupos, 'alineacion', alineacion)
@@ -313,7 +321,7 @@ begin
   return jsonb_build_object('ok', true);
 end $$;
 
--- Crear o editar un partido: cualquier jugador con su PIN.
+-- Crear o editar un partido contra un rival: cualquier jugador con su PIN.
 create or replace function public.guardar_partido(a jsonb, p_id uuid, d jsonb) returns jsonb
 language plpgsql security definer set search_path = public, extensions, pg_temp as $$
 declare au jsonb; ea uuid[]; eb uuid[]; ga int; gb int; g jsonb := '{}'; s jsonb := '{}'; ps jsonb := '{}';
@@ -322,10 +330,9 @@ begin
   au := priv.auth(a, true);
   if not (au->>'ok')::boolean then return au; end if;
   select coalesce(array_agg(distinct x::uuid), '{}') into ea from jsonb_array_elements_text(d->'equipoA') x;
-  select coalesce(array_agg(distinct x::uuid), '{}') into eb from jsonb_array_elements_text(d->'equipoB') x;
-  if cardinality(ea) = 0 or cardinality(eb) = 0 then return jsonb_build_object('ok', false, 'error', 'equipos'); end if;
-  if ea && eb then return jsonb_build_object('ok', false, 'error', 'equipos'); end if;
-  if (select count(*) from public.players where id = any(ea || eb)) <> cardinality(ea) + cardinality(eb) then
+  eb := '{}'; -- del rival no se registra a nadie
+  if cardinality(ea) = 0 then return jsonb_build_object('ok', false, 'error', 'equipos'); end if;
+  if (select count(*) from public.players where id = any(ea)) <> cardinality(ea) then
     return jsonb_build_object('ok', false, 'error', 'jugador');
   end if;
   ga := (d->>'golesA')::int; gb := (d->>'golesB')::int;
@@ -338,18 +345,18 @@ begin
   for k, n in select key, value::int from jsonb_each_text(coalesce(d->'asist', '{}')) loop
     if n > 0 and k::uuid = any(ea || eb) then s := s || jsonb_build_object(k, n); end if;
   end loop;
-  if sa > ga or sb > gb then return jsonb_build_object('ok', false, 'error', 'goles'); end if;
+  if sa > ga then return jsonb_build_object('ok', false, 'error', 'goles'); end if;
   for k, v in select key, value from jsonb_each_text(coalesce(d->'posiciones', '{}')) loop
     if v in ('POR', 'DEF', 'MED', 'DEL') and k::uuid = any(ea || eb) then ps := ps || jsonb_build_object(k, v); end if;
   end loop;
   mv := nullif(d->>'mvp', '')::uuid;
   if mv is not null and not (mv = any(ea || eb)) then mv := null; end if;
   if p_id is null then
-    insert into public.matches (fecha, lugar, equipo_a, equipo_b, goles_a, goles_b, goles, asist, mvp, posiciones, creado_por)
-    values ((d->>'fecha')::date, trim(coalesce(d->>'lugar', '')), ea, eb, ga, gb, g, s, mv, ps, (au->>'jugador')::uuid)
+    insert into public.matches (fecha, lugar, rival, equipo_a, equipo_b, goles_a, goles_b, goles, asist, mvp, posiciones, creado_por)
+    values ((d->>'fecha')::date, trim(coalesce(d->>'lugar', '')), trim(coalesce(d->>'rival', '')), ea, eb, ga, gb, g, s, mv, ps, (au->>'jugador')::uuid)
     returning id into nid;
   else
-    update public.matches set fecha = (d->>'fecha')::date, lugar = trim(coalesce(d->>'lugar', '')),
+    update public.matches set fecha = (d->>'fecha')::date, lugar = trim(coalesce(d->>'lugar', '')), rival = trim(coalesce(d->>'rival', '')),
       equipo_a = ea, equipo_b = eb, goles_a = ga, goles_b = gb, goles = g, asist = s, mvp = mv, posiciones = ps
     where id = p_id and borrado is null returning id into nid;
     if nid is null then return jsonb_build_object('ok', false, 'error', 'partido'); end if;
@@ -386,7 +393,7 @@ begin
   if not (au->>'ok')::boolean then return au; end if;
   if not (au->>'admin')::boolean then return jsonb_build_object('ok', false, 'error', 'solo_admin'); end if;
   return jsonb_build_object('ok', true, 'partidos', coalesce((select jsonb_agg(jsonb_build_object('id', id, 'fecha', fecha,
-    'lugar', lugar, 'golesA', goles_a, 'golesB', goles_b, 'borrado', borrado) order by borrado desc)
+    'lugar', lugar, 'rival', rival, 'golesA', goles_a, 'golesB', goles_b, 'borrado', borrado) order by borrado desc)
     from public.matches where borrado is not null), '[]'));
 end $$;
 

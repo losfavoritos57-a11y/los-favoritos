@@ -1,10 +1,12 @@
 import { CONFIG } from './config.js';
 
-const VERSION = 'v11'; // subirla junto con CACHE en sw.js y version.json en cada publicación
+const VERSION = 'v12'; // subirla junto con CACHE en sw.js y version.json en cada publicación
 const POS = { POR: 'Arquero', DEF: 'Defensa', MED: 'Volante', DEL: 'Delantero' };
 const POS_ICO = { POR: '🧤', DEF: '🛡️', MED: '⚙️', DEL: '⚽' };
 const POS_CORTO = { POR: 'Arq', DEF: 'Def', MED: 'Vol', DEL: 'Del' };
-const TEAM = { A: 'Con peto', B: 'Sin peto' };
+const NOSOTROS = 'Los Favoritos';
+const rivalDe = m => m.rival || 'Rival';
+const resultado = (a, b) => a > b ? 'Ganamos' : a < b ? 'Perdimos' : 'Empatamos';
 const VISTAS = ['ranking', 'partidos', 'plantel', 'proxima'];
 const S = { players: [], matches: [], notasRes: [], figuraRes: [], votantes: {}, misVotos: [], minVotos: 3, registroAbierto: true, anotados: [], proxima: null, cargado: false, sinRed: false,
   view: 'ranking', sort: 'pts', rankPos: '', posSort: 'nota', pantalla: 'cargando' };
@@ -38,8 +40,8 @@ const ERRORES = {
   sin_jugador: 'Primero dinos quién eres.',
   pin_formato: 'El PIN tiene que ser de 4 números.',
   datos: 'Algún dato no es válido. Revísalo.',
-  equipos: 'Marca al menos un jugador en cada equipo, sin repetir.',
-  goles: 'Hay más goles de jugadores que goles en el marcador.',
+  equipos: 'Marca a los que jugaron.',
+  goles: 'Hay más goles de jugadores que goles nuestros en el marcador.',
   tiene_partidos: 'No se puede borrar: ya jugó partidos.',
   en_papelera: 'No se puede borrar: aparece en un partido de la papelera.',
   solo_admin: 'Eso lo puede hacer solo el administrador.',
@@ -294,13 +296,13 @@ function scorersLine(m) {
   return g.length ? 'Goles: ' + g.join(', ') : 'Sin goleadores anotados';
 }
 function vPartidos() {
-  const head = `<div class="sec-h"><h2>Partidos</h2>${S.players.length > 1 ? `<button class="btn pri" data-act="new-match">Cargar resultado</button>` : ''}</div>`;
+  const head = `<div class="sec-h"><h2>Partidos</h2>${S.players.length ? `<button class="btn pri" data-act="new-match">Cargar resultado</button>` : ''}</div>`;
   if (!S.players.length) return head + emptyPlayers();
-  if (!S.matches.length) return head + `<div class="note empty"><h3>Sin partidos cargados</h3><p>Después de cada pichanga, carga el marcador, quién jugó en cada equipo y quién hizo los goles. La tabla se arma sola.</p></div>`;
+  if (!S.matches.length) return head + `<div class="note empty"><h3>Sin partidos cargados</h3><p>Después de cada partido, carga el marcador contra el rival, quiénes jugaron y quién hizo los goles. La tabla se arma sola.</p></div>`;
   const ms = [...S.matches].sort(byFecha).reverse();
   return head + `<div class="matches">${ms.map(m => { const a = +m.golesA || 0, b = +m.golesB || 0; return `<button class="match" data-match="${esc(m.id)}">
     <div class="row spread small muted"><span>${esc(fmtFecha(m.fecha, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }))}</span><span>${esc(m.lugar || '')}</span></div>
-    <div class="score"><span class="t">${TEAM.A}</span><span class="n num"><span class="${a > b ? 'win' : ''}">${a}</span> – <span class="${b > a ? 'win' : ''}">${b}</span></span><span class="t b">${TEAM.B}</span></div>
+    <div class="score"><span class="t">${NOSOTROS}</span><span class="n num"><span class="${a > b ? 'win' : ''}">${a}</span> – <span class="${b > a ? 'win' : ''}">${b}</span></span><span class="t b">${esc(rivalDe(m))}</span></div>
     <div class="scorers">${scorersLine(m)}${(f => f.length ? ` · 🐱 Gato: ${esc(nombresFigura(f))}` : '')(figuras(m).ids)}</div></button>`; }).join('')}</div>`;
 }
 function vPlantel() {
@@ -325,25 +327,26 @@ function vProxima() {
   const lista = `<div class="lista">${ps.map(p => `<div class="it"><span><span class="pname">${esc(p.apodo || p.nombre)}</span>${posTag(p)}${meTag(p)}</span>
     <button class="btn voy" data-voy="${esc(p.id)}" aria-pressed="${voy.has(p.id)}">${voy.has(p.id) ? 'Voy' : 'Anotar'}</button></div>`).join('')}</div>`;
   const al = alin(), eq = al || n ? vAlineacion(al || { A: [], B: [], pos: {} }) : ''; // la cancha se ve apenas hay anotados
-  return info + `<div class="row"><button class="btn" data-act="armar" ${n < 2 ? 'disabled' : ''}>${al ? 'Armar de nuevo' : 'Armar equipos parejos'}</button>${n ? `<button class="btn warn" data-act="limpiar">Vaciar lista</button>` : ''}</div>` + eq + lista;
+  return info + (n ? `<div class="row"><button class="btn" data-act="armar">${al ? 'Volver a ubicar por posición' : 'Ubicar a todos por su posición'}</button><button class="btn warn" data-act="limpiar">Vaciar lista</button></div>` : '') + eq + lista;
 }
-const fuerza = (st, id) => st[id]?.nota ?? 6;
-// Alineación de la próxima pichanga (queda guardada para todos).
+// Alineación de la próxima pichanga (queda guardada para todos): A son los titulares en la cancha;
+// los demás anotados son suplentes (la banca). B queda vacío (era del formato de dos equipos).
 function alin() {
   const x = S.proxima?.alineacion;
-  if (!x || !Array.isArray(x.A) || !Array.isArray(x.B)) return null;
-  const A = x.A.filter(pById), B = x.B.filter(pById);
-  if (!A.length && !B.length) return null;
-  const pos = { ...(x.pos || {}) }; [...A, ...B].forEach(id => pos[id] ||= 'MED'); // sin puesto se dibuja de volante
-  return { A, B, pos };
+  if (!x || !Array.isArray(x.A)) return null;
+  const A = x.A.filter(pById);
+  if (!A.length) return null;
+  const pos = { ...(x.pos || {}) }; A.forEach(id => pos[id] ||= 'MED'); // sin puesto se dibuja de volante
+  return { A, B: [], pos };
 }
+const suplentes = al => S.anotados.map(a => a.id).filter(id => pById(id) && !(al?.A || []).includes(id));
 let selJug = null, arrastre = null; // jugador elegido con un toque / arrastre en curso en la cancha
 function guardarAlin(d, msg) {
   selJug = null;
   S.proxima = { ...(S.proxima || {}), alineacion: d }; render(); // se ve al tiro; después se guarda
   guardarAlinCola(d, msg);
 }
-// Mueve a un jugador a una zona de la cancha ("A:DEF", "B:POR"...) o a la banca, y lo guarda para todos.
+// Mueve a un jugador a una zona de la cancha ("A:DEF", "A:POR"...) o a la banca, y lo guarda para todos.
 function moverJugador(id, zona) {
   if (!necesitaJugador()) return;
   const al = alin() || { A: [], B: [], pos: {} };
@@ -352,7 +355,7 @@ function moverJugador(id, zona) {
   al.A = al.A.filter(x => x !== id); al.B = al.B.filter(x => x !== id);
   if (zona === 'banca') delete al.pos[id];
   else { const [k, p] = zona.split(':'); al[k].push(id); al.pos[id] = p; }
-  guardarAlin(!al.A.length && !al.B.length ? null : al, null);
+  guardarAlin(!al.A.length ? null : { A: al.A, B: [], pos: al.pos }, null);
 }
 // Guarda los movimientos en orden (si mueves varios rápido, ninguno se pierde) y recién al final refresca.
 let alinPend, alinMsg = null, alinGuardando = false;
@@ -370,29 +373,29 @@ async function guardarAlinCola(d, msg) {
   alinMsg = null; refrescar();
 }
 function vAlineacion(al) {
-  const st = stats(), voy = new Set(S.anotados.map(a => a.id)), todos = [...al.A, ...al.B];
-  const sobran = todos.filter(id => !voy.has(id)), banca = [...voy].filter(id => pById(id) && !todos.includes(id));
+  const voy = new Set(S.anotados.map(a => a.id)), todos = al.A;
+  const sobran = todos.filter(id => !voy.has(id)), banca = suplentes(al);
   const posDe = id => al.pos[id] || 'MED';
-  const jug = (id, k) => `<button type="button" class="jug${k ? ' ' + k.toLowerCase() : ''}${selJug === id ? ' sel' : ''}${sobran.includes(id) ? ' fuera' : ''}" data-jug="${esc(id)}">${esc(pName(id))}</button>`;
-  const zona = (k, p) => `<div class="zona" data-zona="${k}:${p}"><span class="zl">${POS_ICO[p]} ${POS_CORTO[p]}</span>${al[k].filter(id => posDe(id) === p).map(id => jug(id, k)).join('')}</div>`;
-  const cab = k => `<div class="mitad-h"><span>${TEAM[k]}</span><span class="num">${al[k].length} · nota ${fmt1(al[k].reduce((t, id) => t + fuerza(st, id), 0) / (al[k].length || 1))}${al[k].some(id => posDe(id) === 'POR') ? '' : ' · ⚠️ sin arquero'}</span></div>`;
+  const jug = (id, enCancha) => `<button type="button" class="jug${enCancha ? ' a' : ''}${selJug === id ? ' sel' : ''}${sobran.includes(id) ? ' fuera' : ''}" data-jug="${esc(id)}">${esc(pName(id))}</button>`;
+  const zona = p => `<div class="zona" data-zona="A:${p}"><span class="zl">${POS_ICO[p]} ${POS[p]}</span>${todos.filter(id => posDe(id) === p).map(id => jug(id, true)).join('')}</div>`;
   return `<div class="sec-h"><h2>Alineación</h2>${todos.length ? '<button class="btn pri" data-act="usar-equipos">Usar en el partido</button>' : ''}</div>
-    ${sobran.length ? `<div class="note small">${esc(sobran.map(pName).join(', '))} ya no está${sobran.length > 1 ? 'n' : ''} anotado${sobran.length > 1 ? 's' : ''}. Llévalo${sobran.length > 1 ? 's' : ''} a la banca o toca "Armar de nuevo".</div>` : ''}
-    <div class="campo">${cab('A')}${['POR', 'DEF', 'MED', 'DEL'].map(p => zona('A', p)).join('')}<div class="medio"></div>${['DEL', 'MED', 'DEF', 'POR'].map(p => zona('B', p)).join('')}${cab('B')}</div>
-    <div class="zona banca" data-zona="banca"><span class="zl">Banca · por ubicar</span>${banca.map(id => jug(id, '')).join('') || '<span class="muted small">Arrastra aquí a quien no juega</span>'}</div>
-    <div class="row spread"><p class="muted small" style="margin:0">${selJug ? `Ahora toca dónde va <strong>${esc(pName(selJug))}</strong>.` : (todos.length ? 'Arrastra a cada jugador a su puesto, o tócalo y después toca dónde va. Para sacarlo, llévalo a la banca.' : 'Toca "Armar equipos parejos" para que la app los reparta, o arrastra a cada uno desde la banca a su puesto.')}</p>${todos.length ? '<button class="btn" data-act="alin-borrar">Borrar alineación</button>' : ''}</div>`;
+    ${sobran.length ? `<div class="note small">${esc(sobran.map(pName).join(', '))} ya no está${sobran.length > 1 ? 'n' : ''} anotado${sobran.length > 1 ? 's' : ''}. Llévalo${sobran.length > 1 ? 's' : ''} a la banca.</div>` : ''}
+    <div class="campo"><div class="mitad-h"><span>${NOSOTROS}</span><span class="num">${todos.length} en cancha · ${banca.length} en la banca${todos.length && !todos.some(id => posDe(id) === 'POR') ? ' · ⚠️ sin arquero' : ''}</span></div>
+      ${['DEL', 'MED', 'DEF', 'POR'].map(zona).join('')}<div class="arco"></div></div>
+    <div class="zona banca" data-zona="banca"><span class="zl">Suplentes · banca</span>${banca.map(id => jug(id, false)).join('') || '<span class="muted small">Arrastra aquí a los suplentes</span>'}</div>
+    <div class="row spread"><p class="muted small" style="margin:0">${selJug ? `Ahora toca dónde va <strong>${esc(pName(selJug))}</strong>.` : (todos.length ? 'Arrastra a cada jugador a su puesto, o tócalo y después toca dónde va. Los suplentes quedan en la banca.' : 'Toca "Ubicar a todos por su posición" o arrastra a cada uno desde la banca a su puesto.')}</p>${todos.length ? '<button class="btn" data-act="alin-borrar">Borrar alineación</button>' : ''}</div>`;
 }
+// Pone a todos los anotados en la cancha según la posición de su ficha (un solo arquero; el resto, a ajustar a mano).
 function armar() {
   if (!necesitaJugador()) return;
-  const st = stats(), ids = S.anotados.map(a => a.id).filter(pById);
-  const j = {}; ids.forEach(id => j[id] = fuerza(st, id) + Math.random() * 0.8);
-  const arq = ids.filter(id => pById(id).posicion === 'POR').sort((a, b) => j[b] - j[a]).slice(0, 2); // arquero fijo: uno por lado
-  const resto = ids.filter(id => !arq.includes(id)).sort((a, b) => j[b] - j[a]);
-  const A = [], B = [], sum = t => t.reduce((s, id) => s + fuerza(st, id), 0), cap = Math.ceil(ids.length / 2);
-  arq.forEach((id, i) => (i % 2 ? B : A).push(id));
-  for (const id of resto) { const tA = B.length >= cap || (A.length < cap && sum(A) <= sum(B)); (tA ? A : B).push(id); }
-  const pos = {}; [...A, ...B].forEach(id => { const f = pById(id); const p = arq.includes(id) ? 'POR' : f.posicion === 'POR' ? f.posicion2 : f.posicion; if (p) pos[id] = p; });
-  guardarAlin({ A, B, pos }, 'Equipos armados. Todos los ven en Próxima.');
+  const ids = S.anotados.map(a => a.id).filter(pById), pos = {};
+  let arquero = false;
+  for (const id of ids) {
+    const f = pById(id);
+    if (f.posicion === 'POR' && !arquero) { pos[id] = 'POR'; arquero = true; }
+    else pos[id] = (f.posicion === 'POR' ? f.posicion2 : f.posicion) || 'MED';
+  }
+  guardarAlin({ A: ids, B: [], pos }, 'Listo: cada uno en su posición. Mueve a los suplentes a la banca.');
 }
 
 /* ---------- hojas ---------- */
@@ -495,7 +498,7 @@ async function verPapelera() {
   if (!r.ok) { manejarError(r.error); return; }
   const ps = r.partidos || [];
   openSheet(`<h2>Papelera</h2>`, `<p class="muted small" style="margin:0 0 8px">Los partidos borrados quedan aquí. Si alguien borró uno por error, recupéralo con sus notas y votos.</p>
-    ${ps.length ? `<div class="lista">${ps.map(m => `<div class="it"><span><span class="num">${esc(fmtFecha(m.fecha, { day: 'numeric', month: 'short', year: 'numeric' }))} · ${+m.golesA}–${+m.golesB}</span> <span class="muted small">${esc(m.lugar || '')}</span></span><button class="btn" data-act="restaurar" data-id="${esc(m.id)}">Recuperar</button></div>`).join('')}</div>` : '<p class="muted">No hay partidos borrados.</p>'}`, { type: 'papelera' });
+    ${ps.length ? `<div class="lista">${ps.map(m => `<div class="it"><span><span class="num">${esc(fmtFecha(m.fecha, { day: 'numeric', month: 'short', year: 'numeric' }))} · ${+m.golesA}–${+m.golesB} vs ${esc(rivalDe(m))}</span> <span class="muted small">${esc(m.lugar || '')}</span></span><button class="btn" data-act="restaurar" data-id="${esc(m.id)}">Recuperar</button></div>`).join('')}</div>` : '<p class="muted">No hay partidos borrados.</p>'}`, { type: 'papelera' });
 }
 async function activarAdmin() {
   const clave = $('#adm-in').value;
@@ -545,7 +548,7 @@ function playerSheet(id) {
   const hist = [...S.matches].filter(m => (m.equipoA || []).includes(id) || (m.equipoB || []).includes(id)).sort(byFecha).reverse().slice(0, 8);
   const rows = hist.map(m => {
     const inA = (m.equipoA || []).includes(id), gf = inA ? +m.golesA || 0 : +m.golesB || 0, gc = inA ? +m.golesB || 0 : +m.golesA || 0, r = gf > gc ? 'G' : gf < gc ? 'P' : 'E', np = notasPartido(m.id)[id];
-    return `<div class="prow"><span class="nm">${forma([r])} ${esc(fmtFecha(m.fecha))} <span class="num">${gf}–${gc}</span></span><span class="small muted num">${+m.goles?.[id] ? m.goles[id] + ' G ' : ''}${+m.asist?.[id] ? m.asist[id] + ' A ' : ''}${figuras(m).ids.includes(id) ? '· 🐱 Gato ' : ''}${np ? `· nota ${fmt1(np.avg)}` : ''}</span></div>`;
+    return `<div class="prow"><span class="nm">${forma([r])} ${esc(fmtFecha(m.fecha))} <span class="num">${gf}–${gc}</span> <span class="muted small">vs ${esc(rivalDe(m))}</span></span><span class="small muted num">${+m.goles?.[id] ? m.goles[id] + ' G ' : ''}${+m.asist?.[id] ? m.asist[id] + ' A ' : ''}${figuras(m).ids.includes(id) ? '· 🐱 Gato ' : ''}${np ? `· nota ${fmt1(np.avg)}` : ''}</span></div>`;
   }).join('');
   const puedeEditar = esAdmin() || id === SES.jugador;
   openSheet(`<h2>${esc(p.apodo || p.nombre)}</h2><div class="small" style="opacity:.85">${esc(p.nombre)}${p.numero != null ? ' · #' + esc(p.numero) : ''} · ${esc(POS[p.posicion] || 'Sin posición')}${p.posicion2 ? ' / ' + esc(POS[p.posicion2]) : ''}${p.pie ? ' · Pie ' + esc(p.pie.toLowerCase()) : ''}</div>`, `
@@ -567,14 +570,14 @@ function playerSheet(id) {
 /* formulario de partido */
 let draft = null;
 function matchForm(m, pre) {
-  draft = m ? { id: m.id, fecha: m.fecha, lugar: m.lugar || '', asign: {}, goles: { ...m.goles }, asist: { ...m.asist }, golesA: +m.golesA || 0, golesB: +m.golesB || 0, mvp: m.mvp || '', pos: { ...(m.posiciones || {}) }, tocado: false }
-    : { fecha: (pre && S.proxima?.fecha) || today(), lugar: S.proxima?.lugar || '', asign: {}, goles: {}, asist: {}, golesA: 0, golesB: 0, mvp: '', pos: {}, tocado: false };
+  draft = m ? { id: m.id, fecha: m.fecha, lugar: m.lugar || '', asign: {}, goles: { ...m.goles }, asist: { ...m.asist }, golesA: +m.golesA || 0, golesB: +m.golesB || 0, mvp: m.mvp || '', pos: { ...(m.posiciones || {}) }, rival: m.rival || '', tocado: false }
+    : { fecha: (pre && S.proxima?.fecha) || today(), lugar: S.proxima?.lugar || '', asign: {}, goles: {}, asist: {}, golesA: 0, golesB: 0, mvp: '', pos: {}, rival: '', tocado: false };
   if (m) {
-    (m.equipoA || []).forEach(id => draft.asign[id] = 'A'); (m.equipoB || []).forEach(id => draft.asign[id] = 'B');
-    const ga = draft.golesA, gb = draft.golesB; syncScore();
-    if (draft.golesA !== ga || draft.golesB !== gb) { draft.golesA = ga; draft.golesB = gb; draft.tocado = true; }
+    (m.equipoA || []).forEach(id => draft.asign[id] = 'A');
+    const ga = draft.golesA; syncScore();
+    if (draft.golesA !== ga) { draft.golesA = ga; draft.tocado = true; }
   }
-  if (pre) { pre.A.forEach(id => draft.asign[id] = 'A'); pre.B.forEach(id => draft.asign[id] = 'B'); Object.assign(draft.pos, pre.pos || {}); }
+  if (pre) { pre.A.forEach(id => draft.asign[id] = 'A'); Object.assign(draft.pos, pre.pos || {}); }
   for (const id of Object.keys(draft.asign)) draft.pos[id] ||= pById(id)?.posicion || '';
   const voy = new Set(S.anotados.map(a => a.id));
   draft.orden = [...S.players].sort((a, b) => (!!draft.asign[b.id] - !!draft.asign[a.id]) || (voy.has(b.id) - voy.has(a.id)) || (a.apodo || a.nombre).localeCompare(b.apodo || b.nombre)).map(p => p.id);
@@ -587,36 +590,36 @@ function renderMatchForm() {
   $('#mf').innerHTML = `<div class="stack">
    <div class="row"><div class="field"><label for="mf-fecha">Fecha</label><input id="mf-fecha" type="date" value="${esc(d.fecha)}"></div>
     <div class="field"><label for="mf-lugar">Cancha</label><input id="mf-lugar" maxlength="50" value="${esc(d.lugar)}" placeholder="Ej: Club Ñuñoa, cancha 3"></div></div>
-   <div class="bigscore"><div class="side"><span>${TEAM.A}</span><input id="mf-ga" class="num" type="number" min="0" max="99" inputmode="numeric" value="${d.golesA}" aria-label="Goles ${TEAM.A}"></div>
+   <div class="field"><label for="mf-rival">Rival</label><input id="mf-rival" maxlength="40" value="${esc(d.rival)}" placeholder="Nombre del otro equipo (opcional)"></div>
+   <div class="bigscore"><div class="side"><span>${NOSOTROS}</span><input id="mf-ga" class="num" type="number" min="0" max="99" inputmode="numeric" value="${d.golesA}" aria-label="Goles nuestros"></div>
     <span class="muted" style="font-family:var(--f-display);font-size:32px">–</span>
-    <div class="side"><span>${TEAM.B}</span><input id="mf-gb" class="num" type="number" min="0" max="99" inputmode="numeric" value="${d.golesB}" aria-label="Goles ${TEAM.B}"></div></div>
-   <div><div class="lbl2">Quién jugó y en qué equipo</div><p class="muted small" style="margin:2px 0 4px">Marca el equipo de cada uno, dónde jugó más (Arq, Def, Vol o Del) y súmale sus goles (G) y asistencias (A). El marcador se va sumando solo.</p>
+    <div class="side"><span>${esc(d.rival || 'Rival')}</span><input id="mf-gb" class="num" type="number" min="0" max="99" inputmode="numeric" value="${d.golesB}" aria-label="Goles del rival"></div></div>
+   <div><div class="lbl2">Quiénes jugaron</div><p class="muted small" style="margin:2px 0 4px">Marca a los que jugaron (titulares y los que entraron), dónde jugó más cada uno (Arq, Def, Vol o Del) y súmale sus goles (G) y asistencias (A). Nuestro marcador se va sumando solo; los goles del rival ponlos a mano.</p>
    ${ps.map(p => { const t = d.asign[p.id] || ''; return `<div class="prow"><span class="nm">${esc(p.apodo || p.nombre)}${t ? ` <select class="possel" data-pos="${esc(p.id)}" aria-label="Puesto de ${esc(p.apodo || p.nombre)}"><option value="">Puesto</option>${Object.keys(POS).map(k => `<option value="${k}" ${d.pos[p.id] === k ? 'selected' : ''}>${POS_CORTO[k]}</option>`).join('')}</select>` : posTag(p)}</span>
      <span class="row" style="gap:8px">${t ? `<span class="step">G<button type="button" data-st="goles" data-id="${esc(p.id)}" data-d="-1" aria-label="Quitar gol">−</button><b class="num">${+d.goles[p.id] || 0}</b><button type="button" data-st="goles" data-id="${esc(p.id)}" data-d="1" aria-label="Sumar gol">+</button></span>
        <span class="step">A<button type="button" data-st="asist" data-id="${esc(p.id)}" data-d="-1" aria-label="Quitar asistencia">−</button><b class="num">${+d.asist[p.id] || 0}</b><button type="button" data-st="asist" data-id="${esc(p.id)}" data-d="1" aria-label="Sumar asistencia">+</button></span>` : ''}
-     <span class="seg"><button type="button" class="a" data-asig="A" data-id="${esc(p.id)}" aria-pressed="${t === 'A'}">Peto</button><button type="button" data-asig="" data-id="${esc(p.id)}" aria-pressed="${!t}">No</button><button type="button" class="b" data-asig="B" data-id="${esc(p.id)}" aria-pressed="${t === 'B'}">Sin</button></span></span></div>`; }).join('')}</div>
+     <span class="seg"><button type="button" class="b" data-asig="A" data-id="${esc(p.id)}" aria-pressed="${!!t}">Jugó</button><button type="button" data-asig="" data-id="${esc(p.id)}" aria-pressed="${!t}">No</button></span></span></div>`; }).join('')}</div>
    <div class="row spread">${d.id ? `<button type="button" class="btn warn" data-act="del-match">Borrar partido</button>` : '<span></span>'}<button type="button" class="btn pri" data-act="save-match">Guardar partido</button></div></div>`;
 }
 function syncScore() {
   if (draft.tocado) return;
   const sum = t => Object.entries(draft.goles).filter(([id]) => draft.asign[id] === t).reduce((s, [, n]) => s + (+n || 0), 0);
-  draft.golesA = sum('A'); draft.golesB = sum('B');
+  draft.golesA = sum('A'); // los goles del rival se ponen a mano
 }
 function keepInputs() {
   const g = id => $('#' + id); if (!g('mf-fecha')) return;
-  draft.fecha = g('mf-fecha').value; draft.lugar = g('mf-lugar').value;
-  if (draft.tocado) { draft.golesA = +g('mf-ga').value || 0; draft.golesB = +g('mf-gb').value || 0; }
+  draft.fecha = g('mf-fecha').value; draft.lugar = g('mf-lugar').value; draft.rival = g('mf-rival').value; draft.golesB = +g('mf-gb').value || 0;
+  if (draft.tocado) draft.golesA = +g('mf-ga').value || 0;
 }
 async function saveMatch() {
   const d = draft;
-  d.fecha = $('#mf-fecha').value || today(); d.lugar = $('#mf-lugar').value.trim();
+  d.fecha = $('#mf-fecha').value || today(); d.lugar = $('#mf-lugar').value.trim(); d.rival = $('#mf-rival').value.trim();
   d.golesA = Math.max(0, +$('#mf-ga').value || 0); d.golesB = Math.max(0, +$('#mf-gb').value || 0);
-  const A = Object.keys(d.asign).filter(id => d.asign[id] === 'A'), B = Object.keys(d.asign).filter(id => d.asign[id] === 'B');
-  if (!A.length || !B.length) { toast(ERRORES.equipos); return; }
-  const ind = t => t.reduce((s, id) => s + (+d.goles[id] || 0), 0);
-  if (ind(A) > d.golesA || ind(B) > d.golesB) { toast(ERRORES.goles); return; }
+  const A = Object.keys(d.asign).filter(id => d.asign[id] === 'A');
+  if (!A.length) { toast(ERRORES.equipos); return; }
+  if (A.reduce((s, id) => s + (+d.goles[id] || 0), 0) > d.golesA) { toast(ERRORES.goles); return; }
   const limpio = o => Object.fromEntries(Object.entries(o).filter(([id, n]) => +n > 0 && d.asign[id]));
-  const datos = { fecha: d.fecha, lugar: d.lugar, equipoA: A, equipoB: B, golesA: d.golesA, golesB: d.golesB, goles: limpio(d.goles), asist: limpio(d.asist), mvp: d.asign[d.mvp] ? d.mvp : '',
+  const datos = { fecha: d.fecha, lugar: d.lugar, rival: d.rival, equipoA: A, equipoB: [], golesA: d.golesA, golesB: d.golesB, goles: limpio(d.goles), asist: limpio(d.asist), mvp: d.asign[d.mvp] ? d.mvp : '',
     posiciones: Object.fromEntries(Object.entries(d.pos).filter(([id, v]) => v && d.asign[id])) };
   const r = await accion('guardar_partido', { p_id: d.id || null, d: datos }, 'Partido guardado. La tabla ya se actualizó.');
   if (r) { closeSheet(); S.view = 'partidos'; render(); }
@@ -630,13 +633,13 @@ function matchSheet(id) {
   const mine = me ? S.misVotos.find(n => n.matchId === id) : null;
   const nv = +S.votantes[id] || 0;
   const fig = figuras(m);
-  const team = (k, ids) => `<div class="team"><h3><span>${TEAM[k]}</span><span class="num">${k === 'A' ? a : b}</span></h3><ul>${ids.map(pid => `<li><span>${esc(pName(pid))}${fig.ids.includes(pid) ? ' <span class="me-tag">🐱 GATO</span>' : ''}</span><span class="small muted num">${+m.goles?.[pid] ? m.goles[pid] + ' G ' : ''}${+m.asist?.[pid] ? m.asist[pid] + ' A ' : ''}${np[pid] ? `<span class="badge-n">${fmt1(np[pid].avg)}</span>` : ''}</span></li>`).join('')}</ul></div>`;
+  const team = ids => `<div class="team"><h3><span>${NOSOTROS}</span><span class="num">${a} – ${b}</span></h3><ul>${ids.map(pid => `<li><span>${esc(pName(pid))}${fig.ids.includes(pid) ? ' <span class="me-tag">🐱 GATO</span>' : ''}</span><span class="small muted num">${+m.goles?.[pid] ? m.goles[pid] + ' G ' : ''}${+m.asist?.[pid] ? m.asist[pid] + ' A ' : ''}${np[pid] ? `<span class="badge-n">${fmt1(np[pid].avg)}</span>` : ''}</span></li>`).join('')}</ul></div>`;
   const votables = [...(m.equipoA || []), ...(m.equipoB || [])].filter(pid => pById(pid) && pid !== me?.id);
   myRates = Object.fromEntries(Object.entries(mine?.notas || {}).filter(([pid]) => votables.includes(pid)));
   rateCtx = { mid: id, votables, existia: !!mine };
   const rateRows = votables.map(pid => `<div class="prow"><span class="nm">${esc(pName(pid))}</span><span class="rate">${[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => `<button type="button" data-rate="${n}" data-id="${esc(pid)}" aria-pressed="${+myRates[pid] === n}">${n}</button>`).join('')}</span></div>`).join('');
-  openSheet(`<h2 class="num">${a} – ${b}</h2><div class="small" style="opacity:.85">${esc(fmtFecha(m.fecha, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }))}${m.lugar ? ' · ' + esc(m.lugar) : ''}</div>`, `
-   <div class="teams">${team('A', m.equipoA || [])}${team('B', m.equipoB || [])}</div>
+  openSheet(`<h2>${resultado(a, b)} <span class="num">${a} – ${b}</span></h2><div class="small" style="opacity:.85">vs ${esc(rivalDe(m))} · ${esc(fmtFecha(m.fecha, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }))}${m.lugar ? ' · ' + esc(m.lugar) : ''}</div>`, `
+   <div class="teams">${team(m.equipoA || [])}</div>
    <p class="muted small" style="margin:0">Votaron ${nv}. Los votos son secretos: la nota de cada uno (el número amarillo) aparece cuando lo califican al menos ${S.minVotos}, así nadie puede adivinar qué puso otro. 🐱 El gato del partido es el de mejor nota.</p>
    ${me && S.errorJugador === 'bloqueado' ? `<div class="note small">Tu PIN quedó bloqueado unos minutos por intentos fallidos. Vuelve a abrir el partido más rato para votar.</div>`
     : me && !jugo(id, me.id) ? `<div class="note small">Solo ponen notas los que jugaron este partido.</div>`
@@ -727,7 +730,7 @@ document.addEventListener('click', async e => {
     case 'save-rates': once(saveRates); break;
     case 'edit-prox': if (necesitaJugador()) proxForm(); break;
     case 'armar': armar(); break;
-    case 'usar-equipos': { const al = alin(); if (al && necesitaJugador()) matchForm(null, al); } break;
+    case 'usar-equipos': { const al = alin(); if (al && necesitaJugador()) matchForm(null, { A: [...al.A, ...suplentes(al)], pos: al.pos }); } break;
     case 'alin-borrar': if (necesitaJugador()) { if (armedDel !== t) { arm(t, '¿Borrar? Toca otra vez'); return; } disarm(); guardarAlin(null, 'Alineación borrada'); } break;
     case 'actualizar': location.reload(); break;
     case 'limpiar':
@@ -744,7 +747,13 @@ document.addEventListener('click', async e => {
     case 'no-instalar': sinBanner = true; try { localStorage.setItem('favoritos-sin-banner', '1'); } catch {} refrescarBanner(); break;
   }
 });
-document.addEventListener('input', e => { if (e.target.dataset?.pos && draft) { draft.pos[e.target.dataset.pos] = e.target.value; return; } if (e.target.id === 'mf-ga' || e.target.id === 'mf-gb') { draft.tocado = true; draft.golesA = +$('#mf-ga').value || 0; draft.golesB = +$('#mf-gb').value || 0; } });
+document.addEventListener('input', e => {
+  if (!draft) return;
+  if (e.target.dataset?.pos) { draft.pos[e.target.dataset.pos] = e.target.value; return; }
+  if (e.target.id === 'mf-gb') { draft.golesB = +e.target.value || 0; return; }
+  if (e.target.id === 'mf-rival') { draft.rival = e.target.value; const l = e.target.closest('.stack')?.querySelector('.bigscore .side:last-child span'); if (l) l.textContent = e.target.value.trim() || 'Rival'; return; }
+  if (e.target.id === 'mf-ga') { draft.tocado = true; draft.golesA = +e.target.value || 0; }
+});
 document.addEventListener('submit', async e => {
   e.preventDefault();
   const id = e.target.id;
