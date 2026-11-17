@@ -1,6 +1,6 @@
 import { CONFIG } from './config.js';
 
-const VERSION = 'v10'; // subirla junto con CACHE en sw.js y version.json en cada publicación
+const VERSION = 'v11'; // subirla junto con CACHE en sw.js y version.json en cada publicación
 const POS = { POR: 'Arquero', DEF: 'Defensa', MED: 'Volante', DEL: 'Delantero' };
 const POS_ICO = { POR: '🧤', DEF: '🛡️', MED: '⚙️', DEL: '⚽' };
 const POS_CORTO = { POR: 'Arq', DEF: 'Def', MED: 'Vol', DEL: 'Del' };
@@ -324,7 +324,7 @@ function vProxima() {
   const ps = [...S.players].sort((a, b) => (voy.has(b.id) - voy.has(a.id)) || ((b.id === me?.id) - (a.id === me?.id)) || (a.apodo || a.nombre).localeCompare(b.apodo || b.nombre));
   const lista = `<div class="lista">${ps.map(p => `<div class="it"><span><span class="pname">${esc(p.apodo || p.nombre)}</span>${posTag(p)}${meTag(p)}</span>
     <button class="btn voy" data-voy="${esc(p.id)}" aria-pressed="${voy.has(p.id)}">${voy.has(p.id) ? 'Voy' : 'Anotar'}</button></div>`).join('')}</div>`;
-  const al = alin(), eq = al ? vAlineacion(al) : '';
+  const al = alin(), eq = al || n ? vAlineacion(al || { A: [], B: [], pos: {} }) : ''; // la cancha se ve apenas hay anotados
   return info + `<div class="row"><button class="btn" data-act="armar" ${n < 2 ? 'disabled' : ''}>${al ? 'Armar de nuevo' : 'Armar equipos parejos'}</button>${n ? `<button class="btn warn" data-act="limpiar">Vaciar lista</button>` : ''}</div>` + eq + lista;
 }
 const fuerza = (st, id) => st[id]?.nota ?? 6;
@@ -376,11 +376,11 @@ function vAlineacion(al) {
   const jug = (id, k) => `<button type="button" class="jug${k ? ' ' + k.toLowerCase() : ''}${selJug === id ? ' sel' : ''}${sobran.includes(id) ? ' fuera' : ''}" data-jug="${esc(id)}">${esc(pName(id))}</button>`;
   const zona = (k, p) => `<div class="zona" data-zona="${k}:${p}"><span class="zl">${POS_ICO[p]} ${POS_CORTO[p]}</span>${al[k].filter(id => posDe(id) === p).map(id => jug(id, k)).join('')}</div>`;
   const cab = k => `<div class="mitad-h"><span>${TEAM[k]}</span><span class="num">${al[k].length} · nota ${fmt1(al[k].reduce((t, id) => t + fuerza(st, id), 0) / (al[k].length || 1))}${al[k].some(id => posDe(id) === 'POR') ? '' : ' · ⚠️ sin arquero'}</span></div>`;
-  return `<div class="sec-h"><h2>Alineación</h2><button class="btn pri" data-act="usar-equipos">Usar en el partido</button></div>
+  return `<div class="sec-h"><h2>Alineación</h2>${todos.length ? '<button class="btn pri" data-act="usar-equipos">Usar en el partido</button>' : ''}</div>
     ${sobran.length ? `<div class="note small">${esc(sobran.map(pName).join(', '))} ya no está${sobran.length > 1 ? 'n' : ''} anotado${sobran.length > 1 ? 's' : ''}. Llévalo${sobran.length > 1 ? 's' : ''} a la banca o toca "Armar de nuevo".</div>` : ''}
     <div class="campo">${cab('A')}${['POR', 'DEF', 'MED', 'DEL'].map(p => zona('A', p)).join('')}<div class="medio"></div>${['DEL', 'MED', 'DEF', 'POR'].map(p => zona('B', p)).join('')}${cab('B')}</div>
     <div class="zona banca" data-zona="banca"><span class="zl">Banca · por ubicar</span>${banca.map(id => jug(id, '')).join('') || '<span class="muted small">Arrastra aquí a quien no juega</span>'}</div>
-    <div class="row spread"><p class="muted small" style="margin:0">${selJug ? `Ahora toca dónde va <strong>${esc(pName(selJug))}</strong>.` : 'Arrastra a cada jugador a su puesto, o tócalo y después toca dónde va. Para sacarlo, llévalo a la banca.'}</p><button class="btn" data-act="alin-borrar">Borrar alineación</button></div>`;
+    <div class="row spread"><p class="muted small" style="margin:0">${selJug ? `Ahora toca dónde va <strong>${esc(pName(selJug))}</strong>.` : (todos.length ? 'Arrastra a cada jugador a su puesto, o tócalo y después toca dónde va. Para sacarlo, llévalo a la banca.' : 'Toca "Armar equipos parejos" para que la app los reparta, o arrastra a cada uno desde la banca a su puesto.')}</p>${todos.length ? '<button class="btn" data-act="alin-borrar">Borrar alineación</button>' : ''}</div>`;
 }
 function armar() {
   if (!necesitaJugador()) return;
@@ -450,7 +450,7 @@ function cuentaSheet() {
         : ios ? `<p style="margin:4px 0 0">En <strong>Safari</strong>, toca el botón Compartir (el cuadrado con flecha) y elige <strong>Agregar a inicio</strong>.</p>`
         : `<p style="margin:4px 0 0">En <strong>Chrome</strong>, abre el menú (tres puntos) y elige <strong>Instalar app</strong> o <strong>Agregar a pantalla principal</strong>.</p>`}
         <p class="hint">Si abriste el link desde WhatsApp, primero ábrelo en Safari o Chrome.</p></div>`}
-      <div class="row spread"><span class="hint">Las claves quedan guardadas solo en este celular.</span><button class="btn warn" data-act="salir-grupo">Cerrar sesión</button></div>
+      <div class="row spread"><span class="hint">Las claves quedan guardadas solo en este celular. Versión ${VERSION.slice(1)}.</span><button class="btn warn" data-act="salir-grupo">Cerrar sesión</button></div>
     </div>`, { type: 'cuenta' });
 }
 function registroOk() {
