@@ -1,6 +1,6 @@
 import { CONFIG } from './config.js';
 
-const VERSION = 'v16'; // subirla junto con CACHE en sw.js y version.json en cada publicación
+const VERSION = 'v17'; // subirla junto con CACHE en sw.js y version.json en cada publicación
 const POS = { POR: 'Arquero', DEF: 'Defensa', MED: 'Volante', DEL: 'Delantero' };
 const POS_ICO = { POR: '🧤', DEF: '🛡️', MED: '⚙️', DEL: '⚽' };
 const POS_CORTO = { POR: 'Arq', DEF: 'Def', MED: 'Vol', DEL: 'Del' };
@@ -246,18 +246,18 @@ function periodos() {
   return ['', ...anios.flatMap(a => ['A' + a, ...meses.filter(x => x.startsWith(a)).map(x => 'M' + x)])];
 }
 // Gato del mes / del año: el de mejor nota promedio en esos partidos. Para competir hay que tener nota
-// en al menos 2 partidos del mes (1 si el mes tuvo uno solo) o en un tercio de los partidos del año.
+// en al menos la mitad de los partidos del mes o del año (los que ya tienen notas).
 // Si empatan, gana quien fue más veces gato del partido y después quien sumó más goles + asistencias.
 // Tabla de la carrera por el gato de un periodo: los que cumplen el mínimo, de mejor a peor.
 function carrera(p) {
   const ms = partidosDe(p); if (!ms.length) return null;
   const conNotas = new Set(S.notasRes.map(n => n.matchId)), nn = ms.filter(m => conNotas.has(m.id)).length;
-  const min = p[0] === 'M' ? Math.max(1, Math.min(2, nn)) : Math.max(1, Math.ceil(nn / 3));
+  const min = Math.max(1, Math.ceil(nn / 2));
   const st = stats(ms), k = s => [Math.round(s.nota * 10), s.mvp, s.g + s.a]; // a 1 decimal, como se ve en pantalla
   const cmp = (x, y) => { for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i]; return 0; };
   const lista = Object.entries(st).filter(([id, s]) => pById(id) && s.nota != null && s.pn >= min)
     .map(([id, s]) => ({ id, nota: s.nota, pn: s.pn, k: k(s) })).sort((a, b) => cmp(b.k, a.k));
-  return { lista, min, st, cmp };
+  return { lista, min, nn, st, cmp };
 }
 function gatoDe(p) {
   const c = carrera(p); if (!c) return null;
@@ -275,7 +275,7 @@ function vPelea() {
   if (!cm && !ca) return '';
   const me = myPlayer();
   const top = (c, cuando) => !c ? '<p class="muted small" style="margin:2px 0 0">Todavía no hay partidos.</p>'
-    : !c.lista.length ? `<p class="muted small" style="margin:2px 0 0">Nadie tiene notas suficientes todavía (hay que tener nota en ${c.min} partido${c.min === 1 ? '' : 's'}).</p>`
+    : !c.lista.length ? `<p class="muted small" style="margin:2px 0 0">Nadie llega al mínimo todavía.</p>`
     : `<ol class="pelea">${c.lista.slice(0, 3).map(x => `<li>${['🥇', '🥈', '🥉'][puesto(c, x)] || '🏅'} <strong>${esc(pName(x.id))}</strong>${x.id === me?.id ? ' <span class="me-tag">TÚ</span>' : ''} <span class="num">${fmt1(x.nota)}</span></li>`).join('')}</ol>`;
   const yo = (c, txt) => { if (!me || !c) return '';
     const i = c.lista.findIndex(x => x.id === me.id), s = c.st[me.id];
@@ -283,10 +283,11 @@ function vPelea() {
     const falta = c.min - (s?.pn || 0);
     return falta > 0 ? `<p class="small" style="margin:4px 0 0">Te falta nota en ${falta} partido${falta === 1 ? '' : 's'} más para competir en ${txt}.</p>` : ''; };
   const dm = diasHasta(finDeMes(mes)), da = diasHasta(anio + '-12-31');
+  const minimo = c => c && c.nn ? `<div class="muted small">Para competir: nota en al menos ${c.min} de ${c.nn} partido${c.nn === 1 ? '' : 's'}</div>` : '';
   return `<div class="pelea-card"><div class="row spread"><h3>🐱 Así va la pelea por el gato</h3><button class="btn" data-act="compartir-pelea">Compartir 📲</button></div>
-    <div class="pelea-cols"><div><div class="lbl2">Gato de ${MESES[+mes.slice(5) - 1]}</div><div class="muted small">${enDias(dm).replace('s', 'S')}</div>${top(cm)}${yo(cm, 'el mes')}</div>
-    <div><div class="lbl2">Gato del año ${anio}</div><div class="muted small">${da ? `Se elige el 31 de diciembre (${da} día${da === 1 ? '' : 's'})` : 'Se elige hoy'}</div>${top(ca)}${yo(ca, 'el año')}</div></div>
-    <p class="muted small" style="margin:8px 0 0">Los gatos se eligen solos con las notas: el del mes, el último día del mes; el del año, el 31 de diciembre. ¡Pon tus notas después de cada partido!</p></div>`;
+    <div class="pelea-cols"><div><div class="lbl2">Gato de ${MESES[+mes.slice(5) - 1]}</div><div class="muted small">${enDias(dm).replace('s', 'S')}</div>${minimo(cm)}${top(cm)}${yo(cm, 'el mes')}</div>
+    <div><div class="lbl2">Gato del año ${anio}</div><div class="muted small">${da ? `Se elige el 31 de diciembre (${da} día${da === 1 ? '' : 's'})` : 'Se elige hoy'}</div>${minimo(ca)}${top(ca)}${yo(ca, 'el año')}</div></div>
+    <p class="muted small" style="margin:8px 0 0">Los gatos se eligen solos con las notas: el del mes, el último día del mes; el del año, el 31 de diciembre. Para competir hay que tener nota en al menos la mitad de los partidos. ¡Pon tus notas después de cada partido!</p></div>`;
 }
 // Texto para mandar al grupo de WhatsApp.
 function textoPelea() {
@@ -328,7 +329,7 @@ function vGatos() {
   return `<div class="sec-h"><h2>🐱 Gatos ${anio}</h2></div>
     <div class="note cta gato-anio"><span>${cerrado ? 'Gato del año' : 'Gato del año (va ganando)'}: ${anual?.ids.length ? `<strong>${esc(nombresFigura(anual.ids))}</strong> · nota ${fmt1(anual.nota)} en ${anual.pn} partido${anual.pn === 1 ? '' : 's'}` : 'nadie todavía'}</span></div>
     <div class="lista">${meses.map(m => fila('M' + m, m === hoyMes())).join('')}</div>
-    <p class="muted small">El gato del mes es el de mejor nota promedio del mes (hay que tener nota en al menos 2 partidos; 1 si el mes tuvo uno solo). El del año, el de mejor promedio del año con nota en al menos un tercio de los partidos. Los promedios se van acumulando con cada partido.</p>`;
+    <p class="muted small">El gato del mes es el de mejor nota promedio del mes y el del año, el de mejor promedio del año. Para competir hay que tener nota en al menos la mitad de los partidos de ese mes o año. Los promedios se van acumulando con cada partido.</p>`;
 }
 const selPeriodo = () => `<label class="periodo small">Periodo <select id="periodo">${periodos().map(p => `<option value="${p}" ${S.periodo === p ? 'selected' : ''}>${esc(nombrePeriodo(p))}</option>`).join('')}</select></label>`;
 const vistasRank = () => `${selPeriodo()}<div class="row vistas" style="gap:6px"><button class="chip" data-rpos="" aria-pressed="${!S.rankPos}">General</button>${Object.keys(POS).map(p => `<button class="chip" data-rpos="${p}" aria-pressed="${S.rankPos === p}">${POS_ICO[p]} ${POS[p]}s</button>`).join('')}</div>`;
