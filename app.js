@@ -1,6 +1,6 @@
 import { CONFIG } from './config.js';
 
-const VERSION = 'v14'; // subirla junto con CACHE en sw.js y version.json en cada publicación
+const VERSION = 'v15'; // subirla junto con CACHE en sw.js y version.json en cada publicación
 const POS = { POR: 'Arquero', DEF: 'Defensa', MED: 'Volante', DEL: 'Delantero' };
 const POS_ICO = { POR: '🧤', DEF: '🛡️', MED: '⚙️', DEL: '⚽' };
 const POS_CORTO = { POR: 'Arq', DEF: 'Def', MED: 'Vol', DEL: 'Del' };
@@ -219,6 +219,7 @@ function render() {
   if (hayNueva) html += `<div class="note cta nueva"><span><strong>Hay una versión nueva de la app.</strong></span><button class="btn pri" data-act="actualizar">Toca aquí para actualizar</button></div>`;
   if (S.sinRed) html += `<div class="note">Sin conexión. Lo que ves puede no estar al día.</div>`;
   html += bannerInstalar(false);
+  html += vAvisos();
   if (esAdmin() && respaldoViejo()) html += `<div class="note cta"><span><strong>Haz un respaldo.</strong> Pasó más de una semana desde el último. Guárdalo en un lugar privado (no en el grupo).</span><button class="btn pri" data-act="respaldo">Descargar</button></div>`;
   if (!me && S.players.length) html += `<div class="note cta"><span><strong>¿Quién eres?</strong> Elige tu jugador para anotarte, cargar partidos y poner notas.</span><button class="btn pri" data-act="quien">Elegir</button></div>`;
   html += ({ ranking: vRanking, partidos: vPartidos, plantel: vPlantel, proxima: vProxima }[S.view])();
@@ -247,17 +248,73 @@ function periodos() {
 // Gato del mes / del año: el de mejor nota promedio en esos partidos. Para competir hay que tener nota
 // en al menos 2 partidos del mes (1 si el mes tuvo uno solo) o en un tercio de los partidos del año.
 // Si empatan, gana quien fue más veces gato del partido y después quien sumó más goles + asistencias.
-function gatoDe(p) {
+// Tabla de la carrera por el gato de un periodo: los que cumplen el mínimo, de mejor a peor.
+function carrera(p) {
   const ms = partidosDe(p); if (!ms.length) return null;
   const conNotas = new Set(S.notasRes.map(n => n.matchId)), nn = ms.filter(m => conNotas.has(m.id)).length;
   const min = p[0] === 'M' ? Math.max(1, Math.min(2, nn)) : Math.max(1, Math.ceil(nn / 3));
-  const st = stats(ms), c = Object.entries(st).filter(([id, s]) => pById(id) && s.nota != null && s.pn >= min);
-  if (!c.length) return { ids: [], min, n: ms.length };
-  const k = s => [Math.round(s.nota * 10), s.mvp, s.g + s.a]; // a 1 decimal, como se ve en pantalla
-  const mejor = (x, y) => { for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i]; return 0; };
-  const top = c.map(([, s]) => k(s)).reduce((a, b) => mejor(a, b) >= 0 ? a : b);
-  const ids = c.filter(([, s]) => mejor(k(s), top) === 0).map(([id]) => id);
-  return { ids, nota: st[ids[0]].nota, pn: st[ids[0]].pn, min, n: ms.length };
+  const st = stats(ms), k = s => [Math.round(s.nota * 10), s.mvp, s.g + s.a]; // a 1 decimal, como se ve en pantalla
+  const cmp = (x, y) => { for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i]; return 0; };
+  const lista = Object.entries(st).filter(([id, s]) => pById(id) && s.nota != null && s.pn >= min)
+    .map(([id, s]) => ({ id, nota: s.nota, pn: s.pn, k: k(s) })).sort((a, b) => cmp(b.k, a.k));
+  return { lista, min, st, cmp };
+}
+function gatoDe(p) {
+  const c = carrera(p); if (!c) return null;
+  if (!c.lista.length) return { ids: [], min: c.min };
+  const ids = c.lista.filter(x => c.cmp(x.k, c.lista[0].k) === 0).map(x => x.id);
+  return { ids, nota: c.lista[0].nota, pn: c.lista[0].pn, min: c.min };
+}
+const puesto = (c, x) => c.lista.findIndex(y => c.cmp(y.k, x.k) === 0);
+const enDias = d => d === 0 ? 'se elige hoy' : `se elige en ${d} día${d === 1 ? '' : 's'}`;
+const diasHasta = fin => Math.max(0, Math.round((new Date(fin + 'T12:00:00') - new Date(today() + 'T12:00:00')) / 864e5)); // días de calendario
+const finDeMes = ym => { const [y, m] = ym.split('-').map(Number); return `${ym}-${String(new Date(y, m, 0).getDate()).padStart(2, '0')}`; };
+// "Así va la pelea": top 3 del mes y del año en curso, dónde vas tú y cuándo se eligen.
+function vPelea() {
+  const mes = hoyMes(), anio = mes.slice(0, 4), cm = carrera('M' + mes), ca = carrera('A' + anio);
+  if (!cm && !ca) return '';
+  const me = myPlayer();
+  const top = (c, cuando) => !c ? '<p class="muted small" style="margin:2px 0 0">Todavía no hay partidos.</p>'
+    : !c.lista.length ? `<p class="muted small" style="margin:2px 0 0">Nadie tiene notas suficientes todavía (hay que tener nota en ${c.min} partido${c.min === 1 ? '' : 's'}).</p>`
+    : `<ol class="pelea">${c.lista.slice(0, 3).map(x => `<li>${['🥇', '🥈', '🥉'][puesto(c, x)] || '🏅'} <strong>${esc(pName(x.id))}</strong>${x.id === me?.id ? ' <span class="me-tag">TÚ</span>' : ''} <span class="num">${fmt1(x.nota)}</span></li>`).join('')}</ol>`;
+  const yo = (c, txt) => { if (!me || !c) return '';
+    const i = c.lista.findIndex(x => x.id === me.id), s = c.st[me.id];
+    if (i >= 0) return `<p class="small" style="margin:4px 0 0">Tú vas <strong>${puesto(c, c.lista[i]) + 1}°</strong> en ${txt} con ${fmt1(c.lista[i].nota)}.</p>`;
+    const falta = c.min - (s?.pn || 0);
+    return falta > 0 ? `<p class="small" style="margin:4px 0 0">Te falta nota en ${falta} partido${falta === 1 ? '' : 's'} más para competir en ${txt}.</p>` : ''; };
+  const dm = diasHasta(finDeMes(mes)), da = diasHasta(anio + '-12-31');
+  return `<div class="pelea-card"><div class="row spread"><h3>🐱 Así va la pelea por el gato</h3><button class="btn" data-act="compartir-pelea">Compartir 📲</button></div>
+    <div class="pelea-cols"><div><div class="lbl2">Gato de ${MESES[+mes.slice(5) - 1]}</div><div class="muted small">${enDias(dm).replace('s', 'S')}</div>${top(cm)}${yo(cm, 'el mes')}</div>
+    <div><div class="lbl2">Gato del año ${anio}</div><div class="muted small">${da ? `Se elige el 31 de diciembre (${da} día${da === 1 ? '' : 's'})` : 'Se elige hoy'}</div>${top(ca)}${yo(ca, 'el año')}</div></div>
+    <p class="muted small" style="margin:8px 0 0">Los gatos se eligen solos con las notas: el del mes, el último día del mes; el del año, el 31 de diciembre. ¡Pon tus notas después de cada partido!</p></div>`;
+}
+// Texto para mandar al grupo de WhatsApp.
+function textoPelea() {
+  const mes = hoyMes(), anio = mes.slice(0, 4);
+  const linea = c => !c || !c.lista.length ? 'Nadie todavía' : c.lista.slice(0, 3).map(x => `${puesto(c, x) + 1}. ${pName(x.id)} (${fmt1(x.nota)})`).join('\n');
+  const dm = diasHasta(finDeMes(mes));
+  return `🐱 Así va la pelea en Los Favoritos\n\nGato de ${MESES[+mes.slice(5) - 1]} (${enDias(dm)}):\n${linea(carrera('M' + mes))}\n\nGato del año ${anio}:\n${linea(carrera('A' + anio))}\n\n¡Pongan sus notas en la app! ${location.origin}`;
+}
+async function compartirPelea() {
+  const text = textoPelea();
+  if (navigator.share) { try { await navigator.share({ text }); return; } catch (e) { if (e.name === 'AbortError') return; } }
+  window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank', 'noopener');
+}
+// Avisos arriba de la app: votar un partido pendiente, se acaba el mes, y el gato del mes pasado.
+const avisoVisto = k => { try { return localStorage.getItem('favoritos-aviso-' + k) === '1'; } catch { return false; } };
+function vAvisos() {
+  const me = myPlayer(); let html = '';
+  const cerrar = k => `<button class="x-aviso" data-aviso="${k}" aria-label="Ocultar aviso">×</button>`;
+  if (me) {
+    const h = new Date(Date.now() - 10 * 864e5), hace10 = h.getFullYear() + '-' + String(h.getMonth() + 1).padStart(2, '0') + '-' + String(h.getDate()).padStart(2, '0'), votados = new Set(S.misVotos.map(v => v.matchId));
+    const p = [...S.matches].sort(byFecha).reverse().find(m => m.fecha >= hace10 && (m.equipoA || []).includes(me.id) && !votados.has(m.id) && (m.equipoA || []).length > 1);
+    if (p && !avisoVisto('voto-' + p.id)) html += `<div class="note cta aviso"><span>🗳️ <strong>Te falta poner notas</strong> del partido vs ${esc(rivalDe(p))} (${esc(fmtFecha(p.fecha))}). Tus notas eligen al gato.</span><span class="row"><button class="btn pri" data-match="${esc(p.id)}">Votar</button>${cerrar('voto-' + p.id)}</span></div>`;
+  }
+  const mes = hoyMes(), dm = diasHasta(finDeMes(mes)), lider = gatoDe('M' + mes);
+  if (dm <= 5 && lider?.ids.length && !avisoVisto('fin-' + mes)) html += `<div class="note cta aviso"><span>⏳ ${dm ? `<strong>Quedan ${dm} día${dm === 1 ? '' : 's'}</strong> para elegir al` : '<strong>¡Hoy se elige</strong> al'} Gato de ${MESES[+mes.slice(5) - 1]}. Va ganando ${esc(nombresFigura(lider.ids))} (${fmt1(lider.nota)}).</span>${cerrar('fin-' + mes)}</div>`;
+  const d = new Date(); d.setDate(0); const ant = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'), ganador = gatoDe('M' + ant);
+  if (+today().slice(8) <= 5 && ganador?.ids.length && !avisoVisto('ganador-' + ant)) html += `<div class="note cta aviso"><span>🏆 <strong>${esc(nombresFigura(ganador.ids))}</strong> fue el Gato de ${MESES[+ant.slice(5) - 1]} con ${fmt1(ganador.nota)}. ¡Empieza la pelea de ${MESES[+mes.slice(5) - 1]}!</span>${cerrar('ganador-' + ant)}</div>`;
+  return html;
 }
 const hoyMes = () => today().slice(0, 7);
 function vGatos() {
@@ -306,12 +363,12 @@ function vRanking() {
   const lider = best('pts'), gol = best('g'), nota = best('nota');
   const gp = S.periodo ? gatoDe(S.periodo) : null;
   const gatoP = gp ? `<div class="note cta gato-anio"><span>🐱 Gato de ${esc(nombrePeriodo(S.periodo).replace('Año ', 'l año '))}${(S.periodo[0] === 'M' ? S.periodo.slice(1) === hoyMes() : S.periodo.slice(1) === today().slice(0, 4)) ? ' (va ganando)' : ''}: ${gp.ids.length ? `<strong>${esc(nombresFigura(gp.ids))}</strong> · nota ${fmt1(gp.nota)} en ${gp.pn} partido${gp.pn === 1 ? '' : 's'}` : 'nadie todavía'}</span></div>` : '';
-  const pod = ms.length ? `${gatoP}<div class="podio">
+  const pod = (S.periodo ? '' : vPelea()) + (ms.length ? `${gatoP}<div class="podio">
     <div><div class="lbl">Puntero</div><div class="who">${esc(pName(lider.p.id))}</div><div class="stat num">${lider.s.pts} pts en ${lider.s.pj} PJ</div></div>
     <div><div class="lbl">Goleador</div><div class="who">${gol.s.g ? esc(pName(gol.p.id)) : '–'}</div><div class="stat num">${gol.s.g} goles</div></div>
     ${gp ? `<div><div class="lbl">🐱 Gato</div><div class="who">${gp.ids.length ? esc(nombresFigura(gp.ids)) : '–'}</div><div class="stat num">${gp.ids.length ? fmt1(gp.nota) + ' promedio' : 'Todavía nadie'}</div></div>`
     : `<div><div class="lbl">Mejor nota</div><div class="who">${nota.s.nota != null ? esc(pName(nota.p.id)) : '–'}</div><div class="stat num">${nota.s.nota != null ? fmt1(nota.s.nota) + ' promedio · ' + nota.s.nc + ' votos' : 'Nadie ha puesto notas aún'}</div></div>`}
-  </div>` : '';
+  </div>` : '');
   const sortBtns = Object.entries(SORTS).map(([k, v]) => `<button class="chip" data-sort="${k}" aria-pressed="${S.sort === k}">${v.l}</button>`).join('');
   const hl = k => S.sort === k ? ' hl' : '';
   const lead = s => s.pj > 0 && SORTS[S.sort].f(s)[0] > 0;
@@ -787,6 +844,7 @@ document.addEventListener('click', async e => {
   if (ds.sort) { S.sort = ds.sort; render(); return; }
   if (ds.rpos !== undefined) { S.rankPos = ds.rpos; render(); return; }
   if (ds.psort) { S.posSort = ds.psort; render(); return; }
+  if (ds.aviso) { try { localStorage.setItem('favoritos-aviso-' + ds.aviso, '1'); } catch {} render(); return; }
   if (ds.fmt) { const f = alin()?.formacion || formElegida; if (f[0] !== ds.fmt) cambiarFormacion(Object.keys(FORMACIONES).find(k => k[0] === ds.fmt)); return; }
   if (ds.form) { if (ds.form !== (alin()?.formacion || formElegida)) cambiarFormacion(ds.form); return; }
   if (ds.elegir) { pedirPin(ds.elegir); return; }
@@ -829,6 +887,7 @@ document.addEventListener('click', async e => {
     case 'usar-equipos': { const al = alin(); if (al && necesitaJugador()) matchForm(null, { A: [...titulares(al), ...suplentes(al)], pos: posAlin(al) }); } break;
     case 'alin-borrar': if (necesitaJugador()) { if (armedDel !== t) { arm(t, '¿Borrar? Toca otra vez'); return; } disarm(); guardarAlin(null, 'Alineación borrada'); } break;
     case 'actualizar': location.reload(); break;
+    case 'compartir-pelea': compartirPelea(); break;
     case 'limpiar':
       if (!necesitaJugador()) return;
       if (armedDel !== t) { arm(t, '¿Vaciar? Toca otra vez'); return; }
