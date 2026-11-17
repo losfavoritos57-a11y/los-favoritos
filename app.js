@@ -1,6 +1,6 @@
 import { CONFIG } from './config.js';
 
-const VERSION = 'v15'; // subirla junto con CACHE en sw.js y version.json en cada publicación
+const VERSION = 'v16'; // subirla junto con CACHE en sw.js y version.json en cada publicación
 const POS = { POR: 'Arquero', DEF: 'Defensa', MED: 'Volante', DEL: 'Delantero' };
 const POS_ICO = { POR: '🧤', DEF: '🛡️', MED: '⚙️', DEL: '⚽' };
 const POS_CORTO = { POR: 'Arq', DEF: 'Def', MED: 'Vol', DEL: 'Del' };
@@ -1016,6 +1016,7 @@ async function revisarVersion() {
 setInterval(() => { if (document.visibilityState === 'visible') revisarVersion(); }, 5 * 60000);
 
 async function boot() {
+  const v = document.getElementById('version'); if (v) v.textContent = '· Versión ' + VERSION.slice(1);
   revisarVersion();
   try { const v = localStorage.getItem('favoritos-vista'); if (VISTAS.includes(v)) S.view = v; } catch {}
   if (CONFIG.supabaseUrl.includes('TU-PROYECTO')) { S.pantalla = 'config'; render(); return; }
