@@ -227,3 +227,5 @@ td.hl{font-weight:700}
 .vacio b{font-size:22px;line-height:1}
 .slot.drop .vacio,.slot.drop .carta{outline:3px solid #fff;outline-offset:2px}
 @media (max-width:360px){.jug.carta,.vacio{width:58px;min-height:78px;height:auto}.vacio{height:78px}.c-nom{max-width:52px}}
+.periodo{display:flex;align-items:center;gap:8px;margin-bottom:8px;font-weight:600}
+.periodo select{border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:6px 8px}

@@ -1,6 +1,6 @@
 import { CONFIG } from './config.js';
 
-const VERSION = 'v13'; // subirla junto con CACHE en sw.js y version.json en cada publicación
+const VERSION = 'v14'; // subirla junto con CACHE en sw.js y version.json en cada publicación
 const POS = { POR: 'Arquero', DEF: 'Defensa', MED: 'Volante', DEL: 'Delantero' };
 const POS_ICO = { POR: '🧤', DEF: '🛡️', MED: '⚙️', DEL: '⚽' };
 const POS_CORTO = { POR: 'Arq', DEF: 'Def', MED: 'Vol', DEL: 'Del' };
@@ -9,7 +9,7 @@ const rivalDe = m => m.rival || 'Rival';
 const resultado = (a, b) => a > b ? 'Ganamos' : a < b ? 'Perdimos' : 'Empatamos';
 const VISTAS = ['ranking', 'partidos', 'plantel', 'proxima'];
 const S = { players: [], matches: [], notasRes: [], figuraRes: [], votantes: {}, misVotos: [], minVotos: 3, registroAbierto: true, anotados: [], proxima: null, cargado: false, sinRed: false,
-  view: 'ranking', sort: 'pts', rankPos: '', posSort: 'nota', pantalla: 'cargando' };
+  view: 'ranking', sort: 'pts', rankPos: '', posSort: 'nota', periodo: '', pantalla: 'cargando' };
 
 /* ---------- sesión (queda guardada solo en este celular) ---------- */
 const KEY = 'favoritos-sesion';
@@ -123,11 +123,11 @@ function respaldoViejo() {
   return Date.now() - t > 7 * 864e5;
 }
 const nombresFigura = ids => new Intl.ListFormat('es-CL').format(ids.map(pName));
-function stats() {
+function stats(ms = S.matches) {
   const st = {};
-  const P = id => st[id] ??= { pj: 0, pg: 0, pe: 0, pp: 0, g: 0, a: 0, mvp: 0, ns: 0, nc: 0, gf: 0, gc: 0, forma: [] };
+  const P = id => st[id] ??= { pj: 0, pg: 0, pe: 0, pp: 0, g: 0, a: 0, mvp: 0, ns: 0, nc: 0, pn: 0, gf: 0, gc: 0, forma: [] };
   S.players.forEach(p => P(p.id));
-  for (const m of [...S.matches].sort(byFecha)) {
+  for (const m of [...ms].sort(byFecha)) {
     const ga = +m.golesA || 0, gb = +m.golesB || 0;
     for (const [team, gf, gc] of [[m.equipoA || [], ga, gb], [m.equipoB || [], gb, ga]])
       for (const id of team) { const s = P(id), r = gf > gc ? 'G' : gf < gc ? 'P' : 'E'; s.pj++; s.gf += gf; s.gc += gc; s[{ G: 'pg', E: 'pe', P: 'pp' }[r]]++; s.forma.push(r); }
@@ -135,16 +135,17 @@ function stats() {
     for (const [id, n] of Object.entries(m.asist || {})) P(id).a += +n || 0;
     for (const id of figuras(m).ids) P(id).mvp++;
   }
-  for (const n of S.notasRes) if (pById(n.id)) { P(n.id).ns += +n.suma || 0; P(n.id).nc += +n.n || 0; }
+  const ids = ms === S.matches ? null : new Set(ms.map(m => m.id));
+  for (const n of S.notasRes) if (pById(n.id) && (!ids || ids.has(n.matchId))) { const s = P(n.id); s.ns += +n.suma || 0; s.nc += +n.n || 0; s.pn++; }
   for (const s of Object.values(st)) { s.pts = 3 * s.pg + s.pe; s.rend = s.pj ? s.pts / (3 * s.pj) : 0; s.nota = s.nc ? s.ns / s.nc : null; s.forma = s.forma.slice(-5); }
   return st;
 }
 // Puesto de alguien en un partido: el anotado ese día o, si falta, el de su ficha.
 const posDe = (m, id) => m.posiciones?.[id] || pById(id)?.posicion || '';
-function statsPos(pos) {
+function statsPos(pos, ms = S.matches) {
   const st = {}, P = id => st[id] ??= { pj: 0, pg: 0, pe: 0, pp: 0, g: 0, a: 0, gc: 0, vallas: 0, ns: 0, nc: 0 };
   const notas = {}; for (const n of S.notasRes) (notas[n.matchId] ??= {})[n.id] = n;
-  for (const m of S.matches) {
+  for (const m of ms) {
     const ga = +m.golesA || 0, gb = +m.golesB || 0;
     for (const [team, gf, gc] of [[m.equipoA || [], ga, gb], [m.equipoB || [], gb, ga]]) for (const id of team) {
       if (!pById(id) || posDe(m, id) !== pos) continue;
@@ -234,7 +235,46 @@ const posTag = p => p.posicion ? `<span class="ptag">${esc(p.posicion)}</span>` 
 const meTag = p => p.id === SES.jugador ? `<span class="me-tag">TÚ</span>` : '';
 const forma = f => `<span class="forma">${f.map(r => `<i class="${r}" title="${{ G: 'Ganó', E: 'Empató', P: 'Perdió' }[r]}">${r}</i>`).join('')}</span>`;
 
-const vistasRank = () => `<div class="row vistas" style="gap:6px"><button class="chip" data-rpos="" aria-pressed="${!S.rankPos}">General</button>${Object.keys(POS).map(p => `<button class="chip" data-rpos="${p}" aria-pressed="${S.rankPos === p}">${POS_ICO[p]} ${POS[p]}s</button>`).join('')}</div>`;
+// Periodo del ranking: '' = todo, 'A2026' = un año, 'M2026-11' = un mes.
+const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+const nombrePeriodo = p => !p ? 'Histórico' : p[0] === 'A' ? 'Año ' + p.slice(1) : MESES[+p.slice(6) - 1] + ' ' + p.slice(1, 5);
+const partidosDe = p => !p ? S.matches : S.matches.filter(m => (m.fecha || '').startsWith(p.slice(1)));
+function periodos() {
+  const meses = [...new Set(S.matches.map(m => (m.fecha || '').slice(0, 7)).filter(Boolean))].sort().reverse();
+  const anios = [...new Set(meses.map(x => x.slice(0, 4)))];
+  return ['', ...anios.flatMap(a => ['A' + a, ...meses.filter(x => x.startsWith(a)).map(x => 'M' + x)])];
+}
+// Gato del mes / del año: el de mejor nota promedio en esos partidos. Para competir hay que tener nota
+// en al menos 2 partidos del mes (1 si el mes tuvo uno solo) o en un tercio de los partidos del año.
+// Si empatan, gana quien fue más veces gato del partido y después quien sumó más goles + asistencias.
+function gatoDe(p) {
+  const ms = partidosDe(p); if (!ms.length) return null;
+  const conNotas = new Set(S.notasRes.map(n => n.matchId)), nn = ms.filter(m => conNotas.has(m.id)).length;
+  const min = p[0] === 'M' ? Math.max(1, Math.min(2, nn)) : Math.max(1, Math.ceil(nn / 3));
+  const st = stats(ms), c = Object.entries(st).filter(([id, s]) => pById(id) && s.nota != null && s.pn >= min);
+  if (!c.length) return { ids: [], min, n: ms.length };
+  const k = s => [Math.round(s.nota * 10), s.mvp, s.g + s.a]; // a 1 decimal, como se ve en pantalla
+  const mejor = (x, y) => { for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i]; return 0; };
+  const top = c.map(([, s]) => k(s)).reduce((a, b) => mejor(a, b) >= 0 ? a : b);
+  const ids = c.filter(([, s]) => mejor(k(s), top) === 0).map(([id]) => id);
+  return { ids, nota: st[ids[0]].nota, pn: st[ids[0]].pn, min, n: ms.length };
+}
+const hoyMes = () => today().slice(0, 7);
+function vGatos() {
+  const anio = S.periodo ? S.periodo.slice(1, 5) : (S.matches.map(m => (m.fecha || '').slice(0, 4)).sort().pop() || today().slice(0, 4));
+  const meses = [...new Set(S.matches.map(m => (m.fecha || '').slice(0, 7)).filter(x => x.startsWith(anio)))].sort().reverse();
+  if (!meses.length) return '';
+  const fila = (p, enCurso) => { const g = gatoDe(p);
+    return `<div class="it"><span><span class="pname">${esc(nombrePeriodo(p))}</span>${enCurso ? ' <span class="muted small">(en curso)</span>' : ''}</span>
+      <span class="small">${g?.ids.length ? `🐱 <strong>${esc(nombresFigura(g.ids))}</strong> <span class="muted num">${fmt1(g.nota)}</span>` : '<span class="muted">Sin gato todavía</span>'}</span></div>`; };
+  const anual = gatoDe('A' + anio), cerrado = anio < today().slice(0, 4);
+  return `<div class="sec-h"><h2>🐱 Gatos ${anio}</h2></div>
+    <div class="note cta gato-anio"><span>${cerrado ? 'Gato del año' : 'Gato del año (va ganando)'}: ${anual?.ids.length ? `<strong>${esc(nombresFigura(anual.ids))}</strong> · nota ${fmt1(anual.nota)} en ${anual.pn} partido${anual.pn === 1 ? '' : 's'}` : 'nadie todavía'}</span></div>
+    <div class="lista">${meses.map(m => fila('M' + m, m === hoyMes())).join('')}</div>
+    <p class="muted small">El gato del mes es el de mejor nota promedio del mes (hay que tener nota en al menos 2 partidos; 1 si el mes tuvo uno solo). El del año, el de mejor promedio del año con nota en al menos un tercio de los partidos. Los promedios se van acumulando con cada partido.</p>`;
+}
+const selPeriodo = () => `<label class="periodo small">Periodo <select id="periodo">${periodos().map(p => `<option value="${p}" ${S.periodo === p ? 'selected' : ''}>${esc(nombrePeriodo(p))}</option>`).join('')}</select></label>`;
+const vistasRank = () => `${selPeriodo()}<div class="row vistas" style="gap:6px"><button class="chip" data-rpos="" aria-pressed="${!S.rankPos}">General</button>${Object.keys(POS).map(p => `<button class="chip" data-rpos="${p}" aria-pressed="${S.rankPos === p}">${POS_ICO[p]} ${POS[p]}s</button>`).join('')}</div>`;
 const POS_COLS = {
   POR: [['Vallas', s => s.vallas, 'Partidos sin recibir goles'], ['GC/PJ', s => fmt1(s.gc / s.pj), 'Goles recibidos por partido']],
   DEF: [['Vallas', s => s.vallas, 'Partidos sin recibir goles'], ['GC/PJ', s => fmt1(s.gc / s.pj), 'Goles recibidos por partido'], ['Goles', s => s.g]],
@@ -244,7 +284,7 @@ const POS_COLS = {
 const POS_STAT = { POR: 'Vallas invictas', DEF: 'Vallas invictas', MED: 'Goles + asistencias', DEL: 'Goles' };
 const POS_ORDEN = { POR: s => [s.vallas, -s.gc / s.pj], DEF: s => [s.vallas, -s.gc / s.pj, s.g], MED: s => [s.g + s.a, s.rend], DEL: s => [s.g, s.a] };
 function vRankingPos(pos) {
-  const st = statsPos(pos), cols = POS_COLS[pos];
+  const st = statsPos(pos, partidosDe(S.periodo)), cols = POS_COLS[pos];
   const rk = Object.entries(st).map(([id, s]) => ({ p: pById(id), s })).sort((x, y) => {
     const k = s => S.posSort === 'nota' ? [s.nota ?? -1, ...POS_ORDEN[pos](s), s.pj] : [...POS_ORDEN[pos](s), s.nota ?? -1, s.pj];
     const a = k(x.s), b = k(y.s);
@@ -259,14 +299,18 @@ function vRankingPos(pos) {
 }
 function vRanking() {
   if (!S.players.length) return emptyPlayers();
+  if (S.periodo && !periodos().includes(S.periodo)) S.periodo = '';
   if (S.rankPos) return vRankingPos(S.rankPos);
-  const st = stats(), rk = ranked(st, S.sort);
+  const ms = partidosDe(S.periodo), st = stats(ms), rk = ranked(st, S.sort);
   const best = k => ranked(st, k)[0];
   const lider = best('pts'), gol = best('g'), nota = best('nota');
-  const pod = S.matches.length ? `<div class="podio">
+  const gp = S.periodo ? gatoDe(S.periodo) : null;
+  const gatoP = gp ? `<div class="note cta gato-anio"><span>🐱 Gato de ${esc(nombrePeriodo(S.periodo).replace('Año ', 'l año '))}${(S.periodo[0] === 'M' ? S.periodo.slice(1) === hoyMes() : S.periodo.slice(1) === today().slice(0, 4)) ? ' (va ganando)' : ''}: ${gp.ids.length ? `<strong>${esc(nombresFigura(gp.ids))}</strong> · nota ${fmt1(gp.nota)} en ${gp.pn} partido${gp.pn === 1 ? '' : 's'}` : 'nadie todavía'}</span></div>` : '';
+  const pod = ms.length ? `${gatoP}<div class="podio">
     <div><div class="lbl">Puntero</div><div class="who">${esc(pName(lider.p.id))}</div><div class="stat num">${lider.s.pts} pts en ${lider.s.pj} PJ</div></div>
     <div><div class="lbl">Goleador</div><div class="who">${gol.s.g ? esc(pName(gol.p.id)) : '–'}</div><div class="stat num">${gol.s.g} goles</div></div>
-    <div><div class="lbl">Mejor nota</div><div class="who">${nota.s.nota != null ? esc(pName(nota.p.id)) : '–'}</div><div class="stat num">${nota.s.nota != null ? fmt1(nota.s.nota) + ' promedio · ' + nota.s.nc + ' votos' : 'Nadie ha puesto notas aún'}</div></div>
+    ${gp ? `<div><div class="lbl">🐱 Gato</div><div class="who">${gp.ids.length ? esc(nombresFigura(gp.ids)) : '–'}</div><div class="stat num">${gp.ids.length ? fmt1(gp.nota) + ' promedio' : 'Todavía nadie'}</div></div>`
+    : `<div><div class="lbl">Mejor nota</div><div class="who">${nota.s.nota != null ? esc(pName(nota.p.id)) : '–'}</div><div class="stat num">${nota.s.nota != null ? fmt1(nota.s.nota) + ' promedio · ' + nota.s.nc + ' votos' : 'Nadie ha puesto notas aún'}</div></div>`}
   </div>` : '';
   const sortBtns = Object.entries(SORTS).map(([k, v]) => `<button class="chip" data-sort="${k}" aria-pressed="${S.sort === k}">${v.l}</button>`).join('');
   const hl = k => S.sort === k ? ' hl' : '';
@@ -286,7 +330,8 @@ function vRanking() {
   return `${vistasRank()}${pod}
   <div class="sec-h"><h2>Tabla</h2><div class="row">${sortBtns}</div></div>
   <div class="tbl-wrap"><table><thead><tr><th>#</th><th class="l">Jugador</th><th title="Partidos jugados">PJ</th><th title="Ganados-Empatados-Perdidos">G-E-P</th><th>Pts</th><th title="Puntos obtenidos sobre los posibles">Rend.</th><th>Goles</th><th>Asist.</th><th title="Promedio de las notas que le pusieron">Nota</th><th title="Veces que fue el de mejor nota del partido">Gatos</th><th class="l">Últimos 5</th></tr></thead><tbody>${rows}</tbody></table></div>
-  <p class="muted small">Ganar vale 3 puntos y empatar 1. Las notas van del 1 al 10, las ponen los demás después de cada partido y nadie se pone nota a sí mismo.</p>`;
+  <p class="muted small">Ganar vale 3 puntos y empatar 1. Las notas van del 1 al 10, las ponen los demás después de cada partido y nadie se pone nota a sí mismo.</p>
+  ${vGatos()}`;
 }
 function emptyPlayers() {
   return `<div class="note empty"><h3>Todavía no hay nadie en el plantel</h3><p>Parte anotándote tú y después agrega al resto.</p><p><button class="btn pri" data-act="nuevo-yo">Anotarme</button></p></div>`;
@@ -798,6 +843,7 @@ document.addEventListener('click', async e => {
     case 'no-instalar': sinBanner = true; try { localStorage.setItem('favoritos-sin-banner', '1'); } catch {} refrescarBanner(); break;
   }
 });
+document.addEventListener('change', e => { if (e.target.id === 'periodo') { S.periodo = e.target.value; render(); } });
 document.addEventListener('input', e => {
   if (!draft) return;
   if (e.target.dataset?.pos) { draft.pos[e.target.dataset.pos] = e.target.value; return; }
