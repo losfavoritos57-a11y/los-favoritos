@@ -1,10 +1,13 @@
 import { CONFIG } from './config.js';
 
+const VERSION = 'v8'; // subirla junto con CACHE en sw.js y version.json en cada publicación
 const POS = { POR: 'Arquero', DEF: 'Defensa', MED: 'Volante', DEL: 'Delantero' };
+const POS_ICO = { POR: '🧤', DEF: '🛡️', MED: '⚙️', DEL: '⚽' };
+const POS_CORTO = { POR: 'Arq', DEF: 'Def', MED: 'Vol', DEL: 'Del' };
 const TEAM = { A: 'Con peto', B: 'Sin peto' };
 const VISTAS = ['ranking', 'partidos', 'plantel', 'proxima'];
 const S = { players: [], matches: [], notasRes: [], figuraRes: [], votantes: {}, misVotos: [], minVotos: 3, registroAbierto: true, anotados: [], proxima: null, cargado: false, sinRed: false,
-  view: 'ranking', sort: 'pts', equipos: null, pantalla: 'cargando' };
+  view: 'ranking', sort: 'pts', rankPos: '', posSort: 'nota', pantalla: 'cargando' };
 
 /* ---------- sesión (queda guardada solo en este celular) ---------- */
 const KEY = 'favoritos-sesion';
@@ -83,10 +86,6 @@ async function refrescar() {
     olvidarJugador();
   }
   S.errorJugador = r.errorJugador || null;
-  if (S.equipos) {
-    const ids = new Set(S.anotados.map(a => a.id)), eq = [...S.equipos.A, ...S.equipos.B];
-    if (eq.length !== ids.size || eq.some(id => !ids.has(id))) S.equipos = null;
-  }
   S.pantalla = 'app';
   render();
 }
@@ -106,7 +105,7 @@ function toast(msg) { const t = $('#toast'); t.textContent = msg; t.hidden = fal
 /* ---------- estadísticas ---------- */
 const byFecha = (a, b) => (a.fecha || '').localeCompare(b.fecha || '') || (a.creado || 0) - (b.creado || 0);
 function jugo(mid, id) { const m = S.matches.find(x => x.id === mid); return !!m && ((m.equipoA || []).includes(id) || (m.equipoB || []).includes(id)); }
-// Figura del partido: la votan los que jugaron. Gana el más votado (si empatan, todos). Partidos viejos usan la elegida al cargarlos.
+// Gato del partido (antes "figura"): lo votan los que jugaron. Gana el más votado (si empatan, todos). Partidos viejos usan la elegida al cargarlos.
 function figuras(m) {
   const votos = {};
   for (const f of S.figuraRes) if (f.matchId === m.id) votos[f.id] = +f.votos || 0;
@@ -135,6 +134,23 @@ function stats() {
   for (const s of Object.values(st)) { s.pts = 3 * s.pg + s.pe; s.rend = s.pj ? s.pts / (3 * s.pj) : 0; s.nota = s.nc ? s.ns / s.nc : null; s.forma = s.forma.slice(-5); }
   return st;
 }
+// Puesto de alguien en un partido: el anotado ese día o, si falta, el de su ficha.
+const posDe = (m, id) => m.posiciones?.[id] || pById(id)?.posicion || '';
+function statsPos(pos) {
+  const st = {}, P = id => st[id] ??= { pj: 0, pg: 0, pe: 0, pp: 0, g: 0, a: 0, gc: 0, vallas: 0, ns: 0, nc: 0 };
+  const notas = {}; for (const n of S.notasRes) (notas[n.matchId] ??= {})[n.id] = n;
+  for (const m of S.matches) {
+    const ga = +m.golesA || 0, gb = +m.golesB || 0;
+    for (const [team, gf, gc] of [[m.equipoA || [], ga, gb], [m.equipoB || [], gb, ga]]) for (const id of team) {
+      if (!pById(id) || posDe(m, id) !== pos) continue;
+      const s = P(id); s.pj++; s[gf > gc ? 'pg' : gf < gc ? 'pp' : 'pe']++; s.gc += gc; if (!gc) s.vallas++;
+      s.g += +m.goles?.[id] || 0; s.a += +m.asist?.[id] || 0;
+      const n = notas[m.id]?.[id]; if (n) { s.ns += +n.suma || 0; s.nc += +n.n || 0; }
+    }
+  }
+  for (const s of Object.values(st)) { s.nota = s.nc ? s.ns / s.nc : null; s.rend = (3 * s.pg + s.pe) / (3 * s.pj); }
+  return st;
+}
 function notasPartido(mid) {
   const out = {};
   for (const n of S.notasRes) if (n.matchId === mid && +n.n > 0) out[n.id] = { avg: n.suma / n.n, n: +n.n };
@@ -146,7 +162,7 @@ const SORTS = {
   g: { l: 'Goleadores', f: s => [s.g, -s.pj] },
   a: { l: 'Asistencias', f: s => [s.a, -s.pj] },
   nota: { l: 'Mejor nota', f: s => [s.nota ?? -1, s.nc] },
-  mvp: { l: 'Figuras', f: s => [s.mvp, s.pts] },
+  mvp: { l: 'Gatos', f: s => [s.mvp, s.pts] },
 };
 function ranked(st, key) {
   const f = SORTS[key].f;
@@ -193,6 +209,7 @@ function render() {
   $('#btn-cuenta').textContent = (me ? (me.apodo || me.nombre) : 'Entrar como jugador') + (esAdmin() ? ' · admin' : '');
   renderBand();
   let html = '';
+  if (hayNueva) html += `<div class="note cta nueva"><span><strong>Hay una versión nueva de la app.</strong></span><button class="btn pri" data-act="actualizar">Toca aquí para actualizar</button></div>`;
   if (S.sinRed) html += `<div class="note">Sin conexión. Lo que ves puede no estar al día.</div>`;
   html += bannerInstalar(false);
   if (esAdmin() && respaldoViejo()) html += `<div class="note cta"><span><strong>Haz un respaldo.</strong> Pasó más de una semana desde el último. Guárdalo en un lugar privado (no en el grupo).</span><button class="btn pri" data-act="respaldo">Descargar</button></div>`;
@@ -211,8 +228,32 @@ const posTag = p => p.posicion ? `<span class="ptag">${esc(p.posicion)}</span>` 
 const meTag = p => p.id === SES.jugador ? `<span class="me-tag">TÚ</span>` : '';
 const forma = f => `<span class="forma">${f.map(r => `<i class="${r}" title="${{ G: 'Ganó', E: 'Empató', P: 'Perdió' }[r]}">${r}</i>`).join('')}</span>`;
 
+const vistasRank = () => `<div class="row vistas" style="gap:6px"><button class="chip" data-rpos="" aria-pressed="${!S.rankPos}">General</button>${Object.keys(POS).map(p => `<button class="chip" data-rpos="${p}" aria-pressed="${S.rankPos === p}">${POS_ICO[p]} ${POS[p]}s</button>`).join('')}</div>`;
+const POS_COLS = {
+  POR: [['Vallas', s => s.vallas, 'Partidos sin recibir goles'], ['GC/PJ', s => fmt1(s.gc / s.pj), 'Goles recibidos por partido']],
+  DEF: [['Vallas', s => s.vallas, 'Partidos sin recibir goles'], ['GC/PJ', s => fmt1(s.gc / s.pj), 'Goles recibidos por partido'], ['Goles', s => s.g]],
+  MED: [['Rend.', s => Math.round(s.rend * 100) + '%', 'Puntos obtenidos sobre los posibles'], ['Goles', s => s.g], ['Asist.', s => s.a]],
+  DEL: [['Goles', s => s.g], ['Asist.', s => s.a], ['G/PJ', s => fmt1(s.g / s.pj), 'Goles por partido']],
+};
+const POS_STAT = { POR: 'Vallas invictas', DEF: 'Vallas invictas', MED: 'Goles + asistencias', DEL: 'Goles' };
+const POS_ORDEN = { POR: s => [s.vallas, -s.gc / s.pj], DEF: s => [s.vallas, -s.gc / s.pj, s.g], MED: s => [s.g + s.a, s.rend], DEL: s => [s.g, s.a] };
+function vRankingPos(pos) {
+  const st = statsPos(pos), cols = POS_COLS[pos];
+  const rk = Object.entries(st).map(([id, s]) => ({ p: pById(id), s })).sort((x, y) => {
+    const k = s => S.posSort === 'nota' ? [s.nota ?? -1, ...POS_ORDEN[pos](s), s.pj] : [...POS_ORDEN[pos](s), s.nota ?? -1, s.pj];
+    const a = k(x.s), b = k(y.s);
+    for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return b[i] - a[i];
+    return (x.p.apodo || x.p.nombre).localeCompare(y.p.apodo || y.p.nombre);
+  });
+  const tabla = rk.length ? `<div class="tbl-wrap"><table><thead><tr><th>#</th><th class="l">Jugador</th><th title="Partidos jugados de ${POS[pos].toLowerCase()}">PJ</th><th title="Ganados-Empatados-Perdidos">G-E-P</th>${cols.map(c => `<th${c[2] ? ` title="${c[2]}"` : ''}>${c[0]}</th>`).join('')}<th title="Promedio de las notas en esos partidos">Nota</th></tr></thead>
+    <tbody>${rk.map(({ p, s }, i) => `<tr data-player="${esc(p.id)}" class="${i === 0 ? 'top1' : ''}"><td class="pos"><span>${i + 1}</span></td><td class="l"><span class="pname">${esc(p.apodo || p.nombre)}</span>${meTag(p)}</td><td class="num">${s.pj}</td><td class="num">${s.pg}-${s.pe}-${s.pp}</td>${cols.map(c => `<td class="num">${c[1](s)}</td>`).join('')}<td class="num${S.posSort === 'nota' ? ' hl' : ''}">${fmt1(s.nota)}</td></tr>`).join('')}</tbody></table></div>`
+    : `<div class="note empty"><h3>Nadie ha jugado de ${POS[pos].toLowerCase()} todavía</h3><p>Cuando carguen partidos marcando dónde jugó cada uno, aparece aquí.</p></div>`;
+  return `${vistasRank()}<div class="sec-h"><h2>${POS_ICO[pos]} Mejores ${POS[pos].toLowerCase()}s</h2><div class="row"><button class="chip" data-psort="nota" aria-pressed="${S.posSort === 'nota'}">Por nota</button><button class="chip" data-psort="stat" aria-pressed="${S.posSort === 'stat'}">Por ${POS_STAT[pos].toLowerCase()}</button></div></div>${tabla}
+    <p class="muted small">Cuenta solo los partidos jugados de ${POS[pos].toLowerCase()}: si alguien rota, cada puesto lleva su propia cuenta. Si en un partido no se anotó el puesto, se usa el de su ficha. La nota es el promedio que le pusieron en esos partidos.</p>`;
+}
 function vRanking() {
   if (!S.players.length) return emptyPlayers();
+  if (S.rankPos) return vRankingPos(S.rankPos);
   const st = stats(), rk = ranked(st, S.sort);
   const best = k => ranked(st, k)[0];
   const lider = best('pts'), gol = best('g'), nota = best('nota');
@@ -236,9 +277,9 @@ function vRanking() {
     <td class="num${hl('nota')}">${fmt1(s.nota)}</td>
     <td class="num${hl('mvp')}">${s.mvp}</td>
     <td class="l">${forma(s.forma)}</td></tr>`).join('');
-  return `${pod}
+  return `${vistasRank()}${pod}
   <div class="sec-h"><h2>Tabla</h2><div class="row">${sortBtns}</div></div>
-  <div class="tbl-wrap"><table><thead><tr><th>#</th><th class="l">Jugador</th><th title="Partidos jugados">PJ</th><th title="Ganados-Empatados-Perdidos">G-E-P</th><th>Pts</th><th title="Puntos obtenidos sobre los posibles">Rend.</th><th>Goles</th><th>Asist.</th><th title="Promedio de las notas que le pusieron">Nota</th><th title="Veces elegido figura del partido">Figura</th><th class="l">Últimos 5</th></tr></thead><tbody>${rows}</tbody></table></div>
+  <div class="tbl-wrap"><table><thead><tr><th>#</th><th class="l">Jugador</th><th title="Partidos jugados">PJ</th><th title="Ganados-Empatados-Perdidos">G-E-P</th><th>Pts</th><th title="Puntos obtenidos sobre los posibles">Rend.</th><th>Goles</th><th>Asist.</th><th title="Promedio de las notas que le pusieron">Nota</th><th title="Veces elegido gato del partido">Gatos</th><th class="l">Últimos 5</th></tr></thead><tbody>${rows}</tbody></table></div>
   <p class="muted small">Ganar vale 3 puntos y empatar 1. Las notas van del 1 al 10, las ponen los demás después de cada partido y nadie se pone nota a sí mismo.</p>`;
 }
 function emptyPlayers() {
@@ -256,7 +297,7 @@ function vPartidos() {
   return head + `<div class="matches">${ms.map(m => { const a = +m.golesA || 0, b = +m.golesB || 0; return `<button class="match" data-match="${esc(m.id)}">
     <div class="row spread small muted"><span>${esc(fmtFecha(m.fecha, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }))}</span><span>${esc(m.lugar || '')}</span></div>
     <div class="score"><span class="t">${TEAM.A}</span><span class="n num"><span class="${a > b ? 'win' : ''}">${a}</span> – <span class="${b > a ? 'win' : ''}">${b}</span></span><span class="t b">${TEAM.B}</span></div>
-    <div class="scorers">${scorersLine(m)}${(f => f.length ? ` · Figura: ${esc(nombresFigura(f))}` : '')(figuras(m).ids)}</div></button>`; }).join('')}</div>`;
+    <div class="scorers">${scorersLine(m)}${(f => f.length ? ` · 🐱 Gato: ${esc(nombresFigura(f))}` : '')(figuras(m).ids)}</div></button>`; }).join('')}</div>`;
 }
 function vPlantel() {
   const st = stats();
@@ -279,25 +320,48 @@ function vProxima() {
   const ps = [...S.players].sort((a, b) => (voy.has(b.id) - voy.has(a.id)) || ((b.id === me?.id) - (a.id === me?.id)) || (a.apodo || a.nombre).localeCompare(b.apodo || b.nombre));
   const lista = `<div class="lista">${ps.map(p => `<div class="it"><span><span class="pname">${esc(p.apodo || p.nombre)}</span>${posTag(p)}${meTag(p)}</span>
     <button class="btn voy" data-voy="${esc(p.id)}" aria-pressed="${voy.has(p.id)}">${voy.has(p.id) ? 'Voy' : 'Anotar'}</button></div>`).join('')}</div>`;
-  let eq = '';
-  if (S.equipos) {
-    const st = stats();
-    eq = `<div class="sec-h"><h2>Equipos sugeridos</h2><div class="row"><button class="btn" data-act="armar">Mezclar de nuevo</button><button class="btn pri" data-act="usar-equipos">Usar en el partido</button></div></div>
-    <div class="teams">${['A', 'B'].map(k => { const ids = S.equipos[k], fz = ids.reduce((t, id) => t + fuerza(st, id), 0); return `<div class="team"><h3><span>${TEAM[k]}</span><span class="num muted">${fmt1(fz / (ids.length || 1))}</span></h3><ul>${ids.map(id => `<li><span>${esc(pName(id))}${posTag(pById(id) || {})}</span><span class="num muted">${fmt1(fuerza(st, id))}</span></li>`).join('')}</ul></div>`; }).join('')}</div>
-    <p class="muted small">El número es el promedio de notas de cada uno (6,0 si todavía no tiene). Los arqueros quedan uno por lado.</p>`;
-  }
-  return info + `<div class="row"><button class="btn" data-act="armar" ${n < 2 ? 'disabled' : ''}>Armar equipos parejos</button>${n ? `<button class="btn warn" data-act="limpiar">Vaciar lista</button>` : ''}</div>` + eq + lista;
+  const al = alin(), eq = al ? vAlineacion(al) : '';
+  return info + `<div class="row"><button class="btn" data-act="armar" ${n < 2 ? 'disabled' : ''}>${al ? 'Armar de nuevo' : 'Armar equipos parejos'}</button>${n ? `<button class="btn warn" data-act="limpiar">Vaciar lista</button>` : ''}</div>` + eq + lista;
 }
 const fuerza = (st, id) => st[id]?.nota ?? 6;
+// Alineación de la próxima pichanga (queda guardada para todos).
+function alin() {
+  const x = S.proxima?.alineacion;
+  if (!x || !Array.isArray(x.A) || !Array.isArray(x.B)) return null;
+  const A = x.A.filter(pById), B = x.B.filter(pById);
+  return A.length || B.length ? { A, B, pos: { ...(x.pos || {}) } } : null;
+}
+const guardarAlin = (d, msg) => once(async () => { if (await accion('guardar_alineacion', { d }, msg)) closeSheet(); });
+function alinSheet(id) {
+  const al = alin(); if (!al) return;
+  const k = al.A.includes(id) ? 'A' : al.B.includes(id) ? 'B' : '', otro = k === 'A' ? 'B' : 'A', cur = al.pos[id] || '';
+  openSheet(`<h2>${esc(pName(id))}</h2><div class="small" style="opacity:.85">${k ? TEAM[k] : 'Todavía sin equipo'}</div>`, `<div class="stack">
+    ${k ? `<div><div class="lbl2">Puesto en este partido</div><div class="row" style="gap:6px;margin-top:6px">${Object.keys(POS).map(p => `<button class="chip" data-alpos="${p}" data-id="${esc(id)}" aria-pressed="${cur === p}">${POS_ICO[p]} ${POS[p]}</button>`).join('')}</div></div>
+    <div class="row"><button class="btn" data-act="alin-cambiar" data-id="${esc(id)}">Pasar a ${TEAM[otro]}</button><button class="btn warn" data-act="alin-sacar" data-id="${esc(id)}">Sacar de la alineación</button></div>`
+    : `<div class="row"><button class="btn" data-act="alin-poner" data-k="A" data-id="${esc(id)}">Poner en ${TEAM.A}</button><button class="btn" data-act="alin-poner" data-k="B" data-id="${esc(id)}">Poner en ${TEAM.B}</button></div>`}</div>`, { type: 'alin', id });
+}
+function vAlineacion(al) {
+  const st = stats(), voy = new Set(S.anotados.map(a => a.id)), todos = [...al.A, ...al.B];
+  const cambio = todos.length !== voy.size || todos.some(id => !voy.has(id));
+  const linea = (ids, p) => { const xs = ids.filter(id => (al.pos[id] || '') === p); if (!xs.length) return '';
+    return `<div class="linea"><div class="lbl3">${p ? POS_ICO[p] + ' ' + POS[p] : 'Sin puesto'}</div><div class="row" style="gap:6px">${xs.map(id => `<button class="chip" data-alin="${esc(id)}">${esc(pName(id))}</button>`).join('')}</div></div>`; };
+  return `<div class="sec-h"><h2>Alineación</h2><button class="btn pri" data-act="usar-equipos">Usar en el partido</button></div>
+    ${cambio ? '<div class="note small">La lista de anotados cambió desde que se armó. Toca "Armar de nuevo" o ajusta a mano.</div>' : ''}
+    ${(f => f.length ? `<div class="linea"><div class="lbl3">Por ubicar</div><div class="row" style="gap:6px">${f.map(id => `<button class="chip" data-alin="${esc(id)}">${esc(pName(id))}</button>`).join('')}</div></div>` : '')([...voy].filter(id => pById(id) && !todos.includes(id)))}
+    <div class="teams">${['A', 'B'].map(k => { const ids = al[k], fz = ids.reduce((t, id) => t + fuerza(st, id), 0); return `<div class="team cancha"><h3><span>${TEAM[k]}</span><span class="num muted">${fmt1(fz / (ids.length || 1))}</span></h3>${ids.some(id => al.pos[id] === 'POR') ? '' : '<p class="small" style="margin:8px 0 0">⚠️ Falta el arquero</p>'}${['POR', 'DEF', 'MED', 'DEL', ''].map(p => linea(ids, p)).join('')}</div>`; }).join('')}</div>
+    <div class="row spread"><p class="muted small" style="margin:0">Toca a un jugador para cambiar su puesto o pasarlo al otro equipo. El número es el promedio de notas del equipo.</p><button class="btn" data-act="alin-borrar">Borrar alineación</button></div>`;
+}
 function armar() {
+  if (!necesitaJugador()) return;
   const st = stats(), ids = S.anotados.map(a => a.id).filter(pById);
   const j = {}; ids.forEach(id => j[id] = fuerza(st, id) + Math.random() * 0.8);
-  const arq = ids.filter(id => pById(id).posicion === 'POR').sort((a, b) => j[b] - j[a]);
-  const resto = ids.filter(id => pById(id).posicion !== 'POR').sort((a, b) => j[b] - j[a]);
+  const arq = ids.filter(id => pById(id).posicion === 'POR').sort((a, b) => j[b] - j[a]).slice(0, 2); // arquero fijo: uno por lado
+  const resto = ids.filter(id => !arq.includes(id)).sort((a, b) => j[b] - j[a]);
   const A = [], B = [], sum = t => t.reduce((s, id) => s + fuerza(st, id), 0), cap = Math.ceil(ids.length / 2);
   arq.forEach((id, i) => (i % 2 ? B : A).push(id));
   for (const id of resto) { const tA = B.length >= cap || (A.length < cap && sum(A) <= sum(B)); (tA ? A : B).push(id); }
-  S.equipos = { A, B }; render();
+  const pos = {}; [...A, ...B].forEach(id => { const f = pById(id); const p = arq.includes(id) ? 'POR' : f.posicion === 'POR' ? f.posicion2 : f.posicion; if (p) pos[id] = p; });
+  guardarAlin({ A, B, pos }, 'Equipos armados. Todos los ven en Próxima.');
 }
 
 /* ---------- hojas ---------- */
@@ -450,7 +514,7 @@ function playerSheet(id) {
   const hist = [...S.matches].filter(m => (m.equipoA || []).includes(id) || (m.equipoB || []).includes(id)).sort(byFecha).reverse().slice(0, 8);
   const rows = hist.map(m => {
     const inA = (m.equipoA || []).includes(id), gf = inA ? +m.golesA || 0 : +m.golesB || 0, gc = inA ? +m.golesB || 0 : +m.golesA || 0, r = gf > gc ? 'G' : gf < gc ? 'P' : 'E', np = notasPartido(m.id)[id];
-    return `<div class="prow"><span class="nm">${forma([r])} ${esc(fmtFecha(m.fecha))} <span class="num">${gf}–${gc}</span></span><span class="small muted num">${+m.goles?.[id] ? m.goles[id] + ' G ' : ''}${+m.asist?.[id] ? m.asist[id] + ' A ' : ''}${figuras(m).ids.includes(id) ? '· Figura ' : ''}${np ? `· nota ${fmt1(np.avg)}` : ''}</span></div>`;
+    return `<div class="prow"><span class="nm">${forma([r])} ${esc(fmtFecha(m.fecha))} <span class="num">${gf}–${gc}</span></span><span class="small muted num">${+m.goles?.[id] ? m.goles[id] + ' G ' : ''}${+m.asist?.[id] ? m.asist[id] + ' A ' : ''}${figuras(m).ids.includes(id) ? '· 🐱 Gato ' : ''}${np ? `· nota ${fmt1(np.avg)}` : ''}</span></div>`;
   }).join('');
   const puedeEditar = esAdmin() || id === SES.jugador;
   openSheet(`<h2>${esc(p.apodo || p.nombre)}</h2><div class="small" style="opacity:.85">${esc(p.nombre)}${p.numero != null ? ' · #' + esc(p.numero) : ''} · ${esc(POS[p.posicion] || 'Sin posición')}${p.posicion2 ? ' / ' + esc(POS[p.posicion2]) : ''}${p.pie ? ' · Pie ' + esc(p.pie.toLowerCase()) : ''}</div>`, `
@@ -461,9 +525,10 @@ function playerSheet(id) {
      <div><div class="v">${s.pts}</div><div class="k">Puntos</div></div>
      <div><div class="v">${s.g}</div><div class="k">Goles</div></div>
      <div><div class="v">${s.a}</div><div class="k">Asist.</div></div>
-     <div><div class="v">${s.mvp}</div><div class="k">Figura</div></div>
+     <div><div class="v">${s.mvp}</div><div class="k">Gatos</div></div>
      <div><div class="v">${s.pj ? (s.g / s.pj).toFixed(1).replace('.', ',') : '–'}</div><div class="k">Goles/PJ</div></div>
     </div>
+    ${(c => Object.keys(c).length ? `<p class="small muted" style="margin:0">Puestos jugados: ${Object.entries(c).sort((x, y) => y[1] - x[1]).map(([k, n]) => `${POS_ICO[k]} ${POS[k]} ${n}`).join(' · ')}</p>` : '')(S.matches.reduce((c, m) => { if ((m.equipoA || []).includes(id) || (m.equipoB || []).includes(id)) { const k = posDe(m, id); if (k) c[k] = (c[k] || 0) + 1; } return c; }, {}))}
     <div><div class="lbl2">Últimos partidos</div>${rows || '<p class="muted">Todavía no juega ningún partido cargado.</p>'}</div>
     ${puedeEditar ? `<div class="row"><button class="btn" data-act="edit-player" data-id="${esc(id)}">Editar datos${esAdmin() ? ' o PIN' : ''}</button></div>` : ''}`, { type: 'pview', id });
 }
@@ -471,14 +536,15 @@ function playerSheet(id) {
 /* formulario de partido */
 let draft = null;
 function matchForm(m, pre) {
-  draft = m ? { id: m.id, fecha: m.fecha, lugar: m.lugar || '', asign: {}, goles: { ...m.goles }, asist: { ...m.asist }, golesA: +m.golesA || 0, golesB: +m.golesB || 0, mvp: m.mvp || '', tocado: false }
-    : { fecha: (pre && S.proxima?.fecha) || today(), lugar: S.proxima?.lugar || '', asign: {}, goles: {}, asist: {}, golesA: 0, golesB: 0, mvp: '', tocado: false };
+  draft = m ? { id: m.id, fecha: m.fecha, lugar: m.lugar || '', asign: {}, goles: { ...m.goles }, asist: { ...m.asist }, golesA: +m.golesA || 0, golesB: +m.golesB || 0, mvp: m.mvp || '', pos: { ...(m.posiciones || {}) }, tocado: false }
+    : { fecha: (pre && S.proxima?.fecha) || today(), lugar: S.proxima?.lugar || '', asign: {}, goles: {}, asist: {}, golesA: 0, golesB: 0, mvp: '', pos: {}, tocado: false };
   if (m) {
     (m.equipoA || []).forEach(id => draft.asign[id] = 'A'); (m.equipoB || []).forEach(id => draft.asign[id] = 'B');
     const ga = draft.golesA, gb = draft.golesB; syncScore();
     if (draft.golesA !== ga || draft.golesB !== gb) { draft.golesA = ga; draft.golesB = gb; draft.tocado = true; }
   }
-  if (pre) { pre.A.forEach(id => draft.asign[id] = 'A'); pre.B.forEach(id => draft.asign[id] = 'B'); }
+  if (pre) { pre.A.forEach(id => draft.asign[id] = 'A'); pre.B.forEach(id => draft.asign[id] = 'B'); Object.assign(draft.pos, pre.pos || {}); }
+  for (const id of Object.keys(draft.asign)) draft.pos[id] ||= pById(id)?.posicion || '';
   const voy = new Set(S.anotados.map(a => a.id));
   draft.orden = [...S.players].sort((a, b) => (!!draft.asign[b.id] - !!draft.asign[a.id]) || (voy.has(b.id) - voy.has(a.id)) || (a.apodo || a.nombre).localeCompare(b.apodo || b.nombre)).map(p => p.id);
   openSheet(`<h2>${m ? 'Editar partido' : 'Cargar resultado'}</h2>`, `<div id="mf"></div>`, { type: 'match' });
@@ -493,8 +559,8 @@ function renderMatchForm() {
    <div class="bigscore"><div class="side"><span>${TEAM.A}</span><input id="mf-ga" class="num" type="number" min="0" max="99" inputmode="numeric" value="${d.golesA}" aria-label="Goles ${TEAM.A}"></div>
     <span class="muted" style="font-family:var(--f-display);font-size:32px">–</span>
     <div class="side"><span>${TEAM.B}</span><input id="mf-gb" class="num" type="number" min="0" max="99" inputmode="numeric" value="${d.golesB}" aria-label="Goles ${TEAM.B}"></div></div>
-   <div><div class="lbl2">Quién jugó y en qué equipo</div><p class="muted small" style="margin:2px 0 4px">Marca el equipo de cada uno y súmale sus goles (G) y asistencias (A). El marcador se va sumando solo.</p>
-   ${ps.map(p => { const t = d.asign[p.id] || ''; return `<div class="prow"><span class="nm">${esc(p.apodo || p.nombre)}${posTag(p)}</span>
+   <div><div class="lbl2">Quién jugó y en qué equipo</div><p class="muted small" style="margin:2px 0 4px">Marca el equipo de cada uno, dónde jugó más (Arq, Def, Vol o Del) y súmale sus goles (G) y asistencias (A). El marcador se va sumando solo.</p>
+   ${ps.map(p => { const t = d.asign[p.id] || ''; return `<div class="prow"><span class="nm">${esc(p.apodo || p.nombre)}${t ? ` <select class="possel" data-pos="${esc(p.id)}" aria-label="Puesto de ${esc(p.apodo || p.nombre)}"><option value="">Puesto</option>${Object.keys(POS).map(k => `<option value="${k}" ${d.pos[p.id] === k ? 'selected' : ''}>${POS_CORTO[k]}</option>`).join('')}</select>` : posTag(p)}</span>
      <span class="row" style="gap:8px">${t ? `<span class="step">G<button type="button" data-st="goles" data-id="${esc(p.id)}" data-d="-1" aria-label="Quitar gol">−</button><b class="num">${+d.goles[p.id] || 0}</b><button type="button" data-st="goles" data-id="${esc(p.id)}" data-d="1" aria-label="Sumar gol">+</button></span>
        <span class="step">A<button type="button" data-st="asist" data-id="${esc(p.id)}" data-d="-1" aria-label="Quitar asistencia">−</button><b class="num">${+d.asist[p.id] || 0}</b><button type="button" data-st="asist" data-id="${esc(p.id)}" data-d="1" aria-label="Sumar asistencia">+</button></span>` : ''}
      <span class="seg"><button type="button" class="a" data-asig="A" data-id="${esc(p.id)}" aria-pressed="${t === 'A'}">Peto</button><button type="button" data-asig="" data-id="${esc(p.id)}" aria-pressed="${!t}">No</button><button type="button" class="b" data-asig="B" data-id="${esc(p.id)}" aria-pressed="${t === 'B'}">Sin</button></span></span></div>`; }).join('')}</div>
@@ -519,7 +585,8 @@ async function saveMatch() {
   const ind = t => t.reduce((s, id) => s + (+d.goles[id] || 0), 0);
   if (ind(A) > d.golesA || ind(B) > d.golesB) { toast(ERRORES.goles); return; }
   const limpio = o => Object.fromEntries(Object.entries(o).filter(([id, n]) => +n > 0 && d.asign[id]));
-  const datos = { fecha: d.fecha, lugar: d.lugar, equipoA: A, equipoB: B, golesA: d.golesA, golesB: d.golesB, goles: limpio(d.goles), asist: limpio(d.asist), mvp: d.asign[d.mvp] ? d.mvp : '' };
+  const datos = { fecha: d.fecha, lugar: d.lugar, equipoA: A, equipoB: B, golesA: d.golesA, golesB: d.golesB, goles: limpio(d.goles), asist: limpio(d.asist), mvp: d.asign[d.mvp] ? d.mvp : '',
+    posiciones: Object.fromEntries(Object.entries(d.pos).filter(([id, v]) => v && d.asign[id])) };
   const r = await accion('guardar_partido', { p_id: d.id || null, d: datos }, 'Partido guardado. La tabla ya se actualizó.');
   if (r) { closeSheet(); S.view = 'partidos'; render(); }
 }
@@ -532,7 +599,7 @@ function matchSheet(id) {
   const mine = me ? S.misVotos.find(n => n.matchId === id) : null;
   const nv = +S.votantes[id] || 0;
   const fig = figuras(m);
-  const team = (k, ids) => `<div class="team"><h3><span>${TEAM[k]}</span><span class="num">${k === 'A' ? a : b}</span></h3><ul>${ids.map(pid => `<li><span>${esc(pName(pid))}${fig.ids.includes(pid) ? ' <span class="me-tag">FIGURA</span>' : ''}${fig.votos[pid] ? ` <span class="small muted">(${fig.votos[pid]} ${fig.votos[pid] === 1 ? 'voto' : 'votos'})</span>` : ''}</span><span class="small muted num">${+m.goles?.[pid] ? m.goles[pid] + ' G ' : ''}${+m.asist?.[pid] ? m.asist[pid] + ' A ' : ''}${np[pid] ? `<span class="badge-n">${fmt1(np[pid].avg)}</span>` : ''}</span></li>`).join('')}</ul></div>`;
+  const team = (k, ids) => `<div class="team"><h3><span>${TEAM[k]}</span><span class="num">${k === 'A' ? a : b}</span></h3><ul>${ids.map(pid => `<li><span>${esc(pName(pid))}${fig.ids.includes(pid) ? ' <span class="me-tag">🐱 GATO</span>' : ''}${fig.votos[pid] ? ` <span class="small muted">(${fig.votos[pid]} ${fig.votos[pid] === 1 ? 'voto' : 'votos'})</span>` : ''}</span><span class="small muted num">${+m.goles?.[pid] ? m.goles[pid] + ' G ' : ''}${+m.asist?.[pid] ? m.asist[pid] + ' A ' : ''}${np[pid] ? `<span class="badge-n">${fmt1(np[pid].avg)}</span>` : ''}</span></li>`).join('')}</ul></div>`;
   const votables = [...(m.equipoA || []), ...(m.equipoB || [])].filter(pid => pById(pid) && pid !== me?.id);
   myRates = Object.fromEntries(Object.entries(mine?.notas || {}).filter(([pid]) => votables.includes(pid)));
   myFigura = votables.includes(mine?.figura) ? mine.figura : '';
@@ -540,14 +607,14 @@ function matchSheet(id) {
   const rateRows = votables.map(pid => `<div class="prow"><span class="nm">${esc(pName(pid))}</span><span class="rate">${[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => `<button type="button" data-rate="${n}" data-id="${esc(pid)}" aria-pressed="${+myRates[pid] === n}">${n}</button>`).join('')}</span></div>`).join('');
   openSheet(`<h2 class="num">${a} – ${b}</h2><div class="small" style="opacity:.85">${esc(fmtFecha(m.fecha, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }))}${m.lugar ? ' · ' + esc(m.lugar) : ''}</div>`, `
    <div class="teams">${team('A', m.equipoA || [])}${team('B', m.equipoB || [])}</div>
-   <p class="muted small" style="margin:0">Votaron ${nv}. Los votos son secretos: la nota de cada uno (el número amarillo) aparece cuando lo califican al menos ${S.minVotos}, y la figura cuando la votan al menos ${S.minVotos}. Así nadie puede adivinar qué puso otro.</p>
+   <p class="muted small" style="margin:0">Votaron ${nv}. Los votos son secretos: la nota de cada uno (el número amarillo) aparece cuando lo califican al menos ${S.minVotos}, y el gato del partido cuando lo votan al menos ${S.minVotos}. Así nadie puede adivinar qué puso otro.</p>
    ${me && S.errorJugador === 'bloqueado' ? `<div class="note small">Tu PIN quedó bloqueado unos minutos por intentos fallidos. Vuelve a abrir el partido más rato para votar.</div>`
-    : me && !jugo(id, me.id) ? `<div class="note small">Solo ponen notas y votan la figura los que jugaron este partido.</div>`
+    : me && !jugo(id, me.id) ? `<div class="note small">Solo ponen notas y votan el gato los que jugaron este partido.</div>`
     : me ? `<div><div class="lbl2">Tus notas${mine ? ' (ya votaste, puedes cambiar tu voto)' : ''}</div><p class="muted small" style="margin:2px 0 4px">Del 1 al 10. Tu nota es una más en el promedio. A ti no te aparece: nadie se pone nota a sí mismo.</p>${rateRows || '<p class="muted">No hay a quién ponerle nota.</p>'}
-     ${votables.length ? `<div class="lbl2" style="margin-top:14px">Tu figura del partido</div><p class="muted small" style="margin:2px 0 6px">Gana el más votado. No puedes votarte a ti mismo.</p>
+     ${votables.length ? `<div class="lbl2" style="margin-top:14px">Tu gato del partido 🐱</div><p class="muted small" style="margin:2px 0 6px">Gana el más votado. No puedes votarte a ti mismo.</p>
      <div class="row figs" style="gap:6px">${votables.map(pid => `<button type="button" class="chip" data-fig="${esc(pid)}" aria-pressed="${myFigura === pid}">${esc(pName(pid))}</button>`).join('')}</div>` : ''}
      <div class="row" style="justify-content:flex-end;margin-top:8px"><button class="btn pri" data-act="save-rates">Guardar mi voto</button></div></div>`
-    : `<div class="note cta small"><span>Para poner notas y votar la figura, primero elige tu jugador.</span><button class="btn pri" data-act="quien">Elegir</button></div>`}
+    : `<div class="note cta small"><span>Para poner notas y votar el gato, primero elige tu jugador.</span><button class="btn pri" data-act="quien">Elegir</button></div>`}
    <div class="row"><button class="btn" data-act="edit-match" data-id="${esc(id)}">Editar partido</button></div>`, { type: 'mview', id });
 }
 async function saveRates() {
@@ -555,7 +622,7 @@ async function saveRates() {
   const notas = Object.fromEntries(Object.entries(myRates).filter(([pid, n]) => +n >= 1 && +n <= 10 && rateCtx.votables.includes(pid)));
   const figura = rateCtx.votables.includes(myFigura) ? myFigura : null;
   const vacio = !Object.keys(notas).length && !figura;
-  if (vacio && !rateCtx.existia) { toast('Pon al menos una nota o elige tu figura'); return; }
+  if (vacio && !rateCtx.existia) { toast('Pon al menos una nota o elige tu gato'); return; }
   const r = await accion('votar', { p_match: rateCtx.mid, p_notas: notas, p_figura: figura }, vacio ? 'Borraste tu voto de este partido' : 'Voto guardado');
   if (r) closeSheet();
 }
@@ -590,12 +657,16 @@ document.addEventListener('click', async e => {
   const ds = t.dataset;
   if (t.classList.contains('tab')) { S.view = ds.v; try { localStorage.setItem('favoritos-vista', S.view); } catch {} render(); window.scrollTo(0, 0); return; }
   if (ds.sort) { S.sort = ds.sort; render(); return; }
+  if (ds.rpos !== undefined) { S.rankPos = ds.rpos; render(); return; }
+  if (ds.psort) { S.posSort = ds.psort; render(); return; }
+  if (ds.alin) { if (necesitaJugador()) alinSheet(ds.alin); return; }
+  if (ds.alpos) { const al = alin(); if (!al || !necesitaJugador()) return; al.pos[ds.id] = ds.alpos; guardarAlin(al, POS[ds.alpos] + ': ' + pName(ds.id)); return; }
   if (ds.elegir) { pedirPin(ds.elegir); return; }
   if (ds.voy) { if (!necesitaJugador()) return; const on = t.getAttribute('aria-pressed') === 'true'; once(() => accion('anotar', { p_player: ds.voy, p_voy: !on })); return; }
   if (ds.asig !== undefined && draft) {
     keepInputs();
-    if (ds.asig) draft.asign[ds.id] = ds.asig;
-    else { delete draft.asign[ds.id]; delete draft.goles[ds.id]; delete draft.asist[ds.id]; if (draft.mvp === ds.id) draft.mvp = ''; }
+    if (ds.asig) { draft.asign[ds.id] = ds.asig; draft.pos[ds.id] ||= pById(ds.id)?.posicion || ''; }
+    else { delete draft.asign[ds.id]; delete draft.pos[ds.id]; delete draft.goles[ds.id]; delete draft.asist[ds.id]; if (draft.mvp === ds.id) draft.mvp = ''; }
     syncScore(); renderMatchForm(); return;
   }
   if (ds.st && draft) { keepInputs(); const o = draft[ds.st]; o[ds.id] = Math.max(0, (+o[ds.id] || 0) + (+ds.d)); if (ds.st === 'goles') syncScore(); renderMatchForm(); return; }
@@ -628,11 +699,23 @@ document.addEventListener('click', async e => {
     case 'save-rates': once(saveRates); break;
     case 'edit-prox': if (necesitaJugador()) proxForm(); break;
     case 'armar': armar(); break;
-    case 'usar-equipos': if (S.equipos && necesitaJugador()) matchForm(null, S.equipos); break;
+    case 'usar-equipos': { const al = alin(); if (al && necesitaJugador()) matchForm(null, al); } break;
+    case 'alin-borrar': if (necesitaJugador()) { if (armedDel !== t) { arm(t, '¿Borrar? Toca otra vez'); return; } disarm(); guardarAlin(null, 'Alineación borrada'); } break;
+    case 'alin-poner': {
+      const al = alin(); if (!al || !necesitaJugador()) break;
+      al[ds.k].push(ds.id); const p = pById(ds.id)?.posicion; if (p) al.pos[ds.id] = p;
+      guardarAlin(al, pName(ds.id) + ' a ' + TEAM[ds.k]); } break;
+    case 'alin-cambiar': case 'alin-sacar': {
+      const al = alin(); if (!al || !necesitaJugador()) break;
+      const k = al.A.includes(ds.id) ? 'A' : 'B', otro = k === 'A' ? 'B' : 'A';
+      al[k] = al[k].filter(x => x !== ds.id);
+      if (ds.act === 'alin-cambiar') al[otro].push(ds.id); else delete al.pos[ds.id];
+      guardarAlin(al, ds.act === 'alin-cambiar' ? 'Cambiado de equipo' : 'Sacado de la alineación'); } break;
+    case 'actualizar': location.reload(); break;
     case 'limpiar':
       if (!necesitaJugador()) return;
       if (armedDel !== t) { arm(t, '¿Vaciar? Toca otra vez'); return; }
-      disarm(); once(async () => { if (await accion('vaciar_anotados', {}, 'Lista vaciada')) { S.equipos = null; render(); } }); break;
+      disarm(); once(() => accion('vaciar_anotados', {}, 'Lista vaciada')); break;
     case 'salir-jugador': olvidarJugador(); closeSheet(); render(); quienEres(); break;
     case 'salir-admin': delete SES.admin; guardarSes(); closeSheet(); toast('Saliste del modo administrador'); render(); break;
     case 'salir-grupo': SES = {}; guardarSes(); closeSheet(); S.pantalla = 'grupo'; render(); break;
@@ -643,7 +726,7 @@ document.addEventListener('click', async e => {
     case 'no-instalar': sinBanner = true; try { localStorage.setItem('favoritos-sin-banner', '1'); } catch {} refrescarBanner(); break;
   }
 });
-document.addEventListener('input', e => { if (e.target.id === 'mf-ga' || e.target.id === 'mf-gb') { draft.tocado = true; draft.golesA = +$('#mf-ga').value || 0; draft.golesB = +$('#mf-gb').value || 0; } });
+document.addEventListener('input', e => { if (e.target.dataset?.pos && draft) { draft.pos[e.target.dataset.pos] = e.target.value; return; } if (e.target.id === 'mf-ga' || e.target.id === 'mf-gb') { draft.tocado = true; draft.golesA = +$('#mf-ga').value || 0; draft.golesB = +$('#mf-gb').value || 0; } });
 document.addEventListener('submit', async e => {
   e.preventDefault();
   const id = e.target.id;
@@ -708,8 +791,20 @@ function refrescarBanner() {
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); instalarEvt = e; refrescarBanner(); });
 window.addEventListener('appinstalled', () => { instalarEvt = null; recienInstalada = true; refrescarBanner(); });
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+// Avisa cuando hay una versión publicada más nueva que la que está corriendo.
+let hayNueva = false;
+async function revisarVersion() {
+  if (hayNueva) return;
+  try {
+    const r = await fetch('/version.json', { cache: 'no-store' }); if (!r.ok) return;
+    const v = (await r.json()).v;
+    if (v && v !== VERSION) { hayNueva = true; if (S.pantalla === 'app') render(); }
+  } catch {}
+}
+setInterval(() => { if (document.visibilityState === 'visible') revisarVersion(); }, 5 * 60000);
 
 async function boot() {
+  revisarVersion();
   try { const v = localStorage.getItem('favoritos-vista'); if (VISTAS.includes(v)) S.view = v; } catch {}
   if (CONFIG.supabaseUrl.includes('TU-PROYECTO')) { S.pantalla = 'config'; render(); return; }
   if (SES.grupo) {
@@ -722,5 +817,5 @@ async function boot() {
   render();
 }
 setInterval(() => { if (document.visibilityState === 'visible' && S.pantalla === 'app') refrescar(); }, 20000);
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && S.pantalla === 'app') refrescar(); });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { revisarVersion(); if (S.pantalla === 'app') refrescar(); } });
 boot();

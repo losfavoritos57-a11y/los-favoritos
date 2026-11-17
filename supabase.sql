@@ -48,6 +48,8 @@ create table if not exists public.matches (
 );
 -- Partidos borrados quedan en la papelera (el administrador los puede recuperar).
 alter table public.matches add column if not exists borrado timestamptz;
+-- Dónde jugó más cada uno ese día: {jugador: 'POR'|'DEF'|'MED'|'DEL'}. Si falta, se usa el de su ficha.
+alter table public.matches add column if not exists posiciones jsonb not null default '{}';
 
 create table if not exists public.notas (
   match_id uuid not null references public.matches(id) on delete cascade,
@@ -71,6 +73,8 @@ create table if not exists public.proxima (
   lugar text not null default '' check (char_length(lugar) <= 50),
   cupos int not null default 0 check (cupos between 0 and 40)
 );
+-- Equipos y puestos armados para la próxima pichanga: {A: [ids], B: [ids], pos: {id: 'POR'|...}}.
+alter table public.proxima add column if not exists alineacion jsonb;
 
 create table if not exists public.intentos (
   clave text primary key,
@@ -234,10 +238,10 @@ begin
       from public.players), '[]'),
     'matches', coalesce((select jsonb_agg(jsonb_build_object('id', id, 'fecha', fecha, 'lugar', lugar,
         'equipoA', to_jsonb(equipo_a), 'equipoB', to_jsonb(equipo_b), 'golesA', goles_a, 'golesB', goles_b,
-        'goles', goles, 'asist', asist, 'mvp', mvp, 'creado', extract(epoch from creado) * 1000))
+        'goles', goles, 'asist', asist, 'mvp', mvp, 'posiciones', posiciones, 'creado', extract(epoch from creado) * 1000))
       from public.matches where borrado is null), '[]'),
     'anotados', coalesce((select jsonb_agg(jsonb_build_object('id', player_id)) from public.anotados), '[]'),
-    'proxima', (select jsonb_build_object('fecha', fecha, 'hora', hora, 'lugar', lugar, 'cupos', cupos)
+    'proxima', (select jsonb_build_object('fecha', fecha, 'hora', hora, 'lugar', lugar, 'cupos', cupos, 'alineacion', alineacion)
       from public.proxima where id = 1));
 end $$;
 
@@ -312,8 +316,8 @@ end $$;
 -- Crear o editar un partido: cualquier jugador con su PIN.
 create or replace function public.guardar_partido(a jsonb, p_id uuid, d jsonb) returns jsonb
 language plpgsql security definer set search_path = public, extensions, pg_temp as $$
-declare au jsonb; ea uuid[]; eb uuid[]; ga int; gb int; g jsonb := '{}'; s jsonb := '{}';
-  k text; n int; sa int := 0; sb int := 0; mv uuid; nid uuid;
+declare au jsonb; ea uuid[]; eb uuid[]; ga int; gb int; g jsonb := '{}'; s jsonb := '{}'; ps jsonb := '{}';
+  k text; n int; sa int := 0; sb int := 0; mv uuid; nid uuid; v text;
 begin
   au := priv.auth(a, true);
   if not (au->>'ok')::boolean then return au; end if;
@@ -335,15 +339,18 @@ begin
     if n > 0 and k::uuid = any(ea || eb) then s := s || jsonb_build_object(k, n); end if;
   end loop;
   if sa > ga or sb > gb then return jsonb_build_object('ok', false, 'error', 'goles'); end if;
+  for k, v in select key, value from jsonb_each_text(coalesce(d->'posiciones', '{}')) loop
+    if v in ('POR', 'DEF', 'MED', 'DEL') and k::uuid = any(ea || eb) then ps := ps || jsonb_build_object(k, v); end if;
+  end loop;
   mv := nullif(d->>'mvp', '')::uuid;
   if mv is not null and not (mv = any(ea || eb)) then mv := null; end if;
   if p_id is null then
-    insert into public.matches (fecha, lugar, equipo_a, equipo_b, goles_a, goles_b, goles, asist, mvp, creado_por)
-    values ((d->>'fecha')::date, trim(coalesce(d->>'lugar', '')), ea, eb, ga, gb, g, s, mv, (au->>'jugador')::uuid)
+    insert into public.matches (fecha, lugar, equipo_a, equipo_b, goles_a, goles_b, goles, asist, mvp, posiciones, creado_por)
+    values ((d->>'fecha')::date, trim(coalesce(d->>'lugar', '')), ea, eb, ga, gb, g, s, mv, ps, (au->>'jugador')::uuid)
     returning id into nid;
   else
     update public.matches set fecha = (d->>'fecha')::date, lugar = trim(coalesce(d->>'lugar', '')),
-      equipo_a = ea, equipo_b = eb, goles_a = ga, goles_b = gb, goles = g, asist = s, mvp = mv
+      equipo_a = ea, equipo_b = eb, goles_a = ga, goles_b = gb, goles = g, asist = s, mvp = mv, posiciones = ps
     where id = p_id and borrado is null returning id into nid;
     if nid is null then return jsonb_build_object('ok', false, 'error', 'partido'); end if;
     -- si alguien ya no figura en el partido, sus notas (dadas o recibidas) dejan de valer
@@ -448,7 +455,35 @@ begin
   au := priv.auth(a, true);
   if not (au->>'ok')::boolean then return au; end if;
   delete from public.anotados where true;
+  update public.proxima set alineacion = null where id = 1;
   return jsonb_build_object('ok', true);
+end $$;
+
+-- Guardar (o borrar con d = null) la alineación de la próxima pichanga: cualquier jugador con su PIN.
+create or replace function public.guardar_alineacion(a jsonb, d jsonb) returns jsonb
+language plpgsql security definer set search_path = public, extensions, pg_temp as $$
+declare au jsonb; ea uuid[]; eb uuid[]; ps jsonb := '{}'; k text; v text;
+begin
+  au := priv.auth(a, true);
+  if not (au->>'ok')::boolean then return au; end if;
+  if d is null or jsonb_typeof(d) <> 'object' then
+    update public.proxima set alineacion = null where id = 1;
+    return jsonb_build_object('ok', true);
+  end if;
+  select coalesce(array_agg(distinct x::uuid), '{}') into ea from jsonb_array_elements_text(d->'A') x;
+  select coalesce(array_agg(distinct x::uuid), '{}') into eb from jsonb_array_elements_text(d->'B') x;
+  if ea && eb or cardinality(ea) + cardinality(eb) > 40 then return jsonb_build_object('ok', false, 'error', 'equipos'); end if;
+  if (select count(*) from public.players where id = any(ea || eb)) <> cardinality(ea) + cardinality(eb) then
+    return jsonb_build_object('ok', false, 'error', 'jugador');
+  end if;
+  for k, v in select key, value from jsonb_each_text(coalesce(d->'pos', '{}')) loop
+    if v in ('POR', 'DEF', 'MED', 'DEL') and k::uuid = any(ea || eb) then ps := ps || jsonb_build_object(k, v); end if;
+  end loop;
+  insert into public.proxima (id, alineacion) values (1, jsonb_build_object('A', to_jsonb(ea), 'B', to_jsonb(eb), 'pos', ps))
+  on conflict (id) do update set alineacion = excluded.alineacion;
+  return jsonb_build_object('ok', true);
+exception when invalid_text_representation then
+  return jsonb_build_object('ok', false, 'error', 'datos');
 end $$;
 
 create or replace function public.guardar_proxima(a jsonb, d jsonb) returns jsonb
@@ -522,11 +557,11 @@ revoke all on function public.configurar(text, text), public.configurado(), publ
   public.votar(jsonb, uuid, jsonb, uuid), public.anotar(jsonb, uuid, boolean), public.vaciar_anotados(jsonb),
   public.guardar_proxima(jsonb, jsonb), public.ping(),
   public.papelera(jsonb), public.restaurar_partido(jsonb, uuid), public.cambiar_claves(jsonb, text, text),
-  public.registro(jsonb, boolean), public.respaldo(jsonb) from public;
+  public.registro(jsonb, boolean), public.respaldo(jsonb), public.guardar_alineacion(jsonb, jsonb) from public;
 grant execute on function public.configurar(text, text), public.configurado(), public.entrar(jsonb),
   public.estado(jsonb), public.crear_jugador(jsonb, jsonb, text), public.editar_jugador(jsonb, uuid, jsonb, text),
   public.borrar_jugador(jsonb, uuid), public.guardar_partido(jsonb, uuid, jsonb), public.borrar_partido(jsonb, uuid),
   public.votar(jsonb, uuid, jsonb, uuid), public.anotar(jsonb, uuid, boolean), public.vaciar_anotados(jsonb),
   public.guardar_proxima(jsonb, jsonb), public.ping(),
   public.papelera(jsonb), public.restaurar_partido(jsonb, uuid), public.cambiar_claves(jsonb, text, text),
-  public.registro(jsonb, boolean), public.respaldo(jsonb) to anon;
+  public.registro(jsonb, boolean), public.respaldo(jsonb), public.guardar_alineacion(jsonb, jsonb) to anon;
