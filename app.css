@@ -240,3 +240,5 @@ td.hl{font-weight:700}
 .note.cta.aviso{border-color:var(--pitch)}
 .x-aviso{border:0;background:transparent;color:var(--muted);font-size:20px;line-height:1;padding:4px 6px}
 .version{opacity:.75;font-size:.9em;white-space:nowrap}
+.ptag.parche{border-color:var(--amarilla);color:var(--ink)}
+.ficha.es-parche{border-style:dashed}

@@ -31,6 +31,8 @@ create table if not exists public.players (
   pin_hash text not null,
   creado timestamptz not null default now()
 );
+-- Parche: jugador esporádico. No entra a la app (su PIN es al azar), pero juega, recibe notas y tiene estadísticas.
+alter table public.players add column if not exists parche boolean not null default false;
 
 create table if not exists public.matches (
   id uuid primary key default gen_random_uuid(),
@@ -242,7 +244,7 @@ begin
     'misVotos', coalesce((select jsonb_agg(jsonb_build_object('matchId', match_id, 'notas', notas, 'figura', figura))
       from public.notas where yo is not null and rater = yo), '[]'),
     'players', coalesce((select jsonb_agg(jsonb_build_object('id', id, 'nombre', nombre, 'apodo', apodo,
-        'posicion', posicion, 'posicion2', posicion2, 'numero', numero, 'pie', pie, 'creado', creado) order by creado)
+        'posicion', posicion, 'posicion2', posicion2, 'numero', numero, 'pie', pie, 'parche', parche, 'creado', creado) order by creado)
       from public.players), '[]'),
     'matches', coalesce((select jsonb_agg(jsonb_build_object('id', id, 'fecha', fecha, 'lugar', lugar,
         'equipoA', to_jsonb(equipo_a), 'equipoB', to_jsonb(equipo_b), 'golesA', goles_a, 'golesB', goles_b,
@@ -278,18 +280,43 @@ exception when check_violation or invalid_text_representation or not_null_violat
   return jsonb_build_object('ok', false, 'error', 'datos');
 end $$;
 
--- Editar jugador: el mismo jugador o el administrador. p_pin_nuevo opcional.
+-- Agregar un parche: cualquier jugador con su PIN (o el admin). No necesita PIN propio.
+create or replace function public.crear_parche(a jsonb, d jsonb) returns jsonb
+language plpgsql security definer set search_path = public, extensions, pg_temp as $$
+declare au jsonb; nid uuid;
+begin
+  au := priv.auth(a, true);
+  if not (au->>'ok')::boolean then return au; end if;
+  if (select count(*) from public.players) >= 60 then return jsonb_build_object('ok', false, 'error', 'lleno'); end if;
+  insert into public.players (nombre, apodo, posicion, posicion2, numero, pie, pin_hash, parche)
+  values (trim(d->>'nombre'), trim(coalesce(d->>'apodo', '')), coalesce(d->>'posicion', ''), coalesce(d->>'posicion2', ''),
+    nullif(d->>'numero', '')::int, coalesce(d->>'pie', ''), crypt(gen_random_uuid()::text, gen_salt('bf')), true)
+  returning id into nid;
+  return jsonb_build_object('ok', true, 'id', nid);
+exception when check_violation or invalid_text_representation or not_null_violation then
+  return jsonb_build_object('ok', false, 'error', 'datos');
+end $$;
+
+-- Editar jugador: el mismo jugador o el administrador (o cualquiera, si es un parche). p_pin_nuevo opcional.
 create or replace function public.editar_jugador(a jsonb, p_id uuid, d jsonb, p_pin_nuevo text) returns jsonb
 language plpgsql security definer set search_path = public, extensions, pg_temp as $$
 declare au jsonb;
 begin
   au := priv.auth(a, true);
   if not (au->>'ok')::boolean then return au; end if;
-  if not (au->>'admin')::boolean and (au->>'jugador')::uuid is distinct from p_id then
+  if not (au->>'admin')::boolean and (au->>'jugador')::uuid is distinct from p_id
+    and not exists (select 1 from public.players where id = p_id and parche) then
     return jsonb_build_object('ok', false, 'error', 'no_es_tuyo');
   end if;
   if coalesce(p_pin_nuevo, '') <> '' and not priv.pin_valido(p_pin_nuevo) then
     return jsonb_build_object('ok', false, 'error', 'pin_formato');
+  end if;
+  -- Solo el admin cambia el PIN de otro o pasa un parche a jugador normal (y para eso le da un PIN).
+  if not (au->>'admin')::boolean and (au->>'jugador')::uuid is distinct from p_id then p_pin_nuevo := ''; end if;
+  if (au->>'admin')::boolean and d ? 'parche' and (d->>'parche')::boolean is false
+    and exists (select 1 from public.players where id = p_id and parche) then
+    if coalesce(p_pin_nuevo, '') = '' then return jsonb_build_object('ok', false, 'error', 'pin_formato'); end if;
+    update public.players set parche = false where id = p_id;
   end if;
   update public.players set nombre = trim(d->>'nombre'), apodo = trim(coalesce(d->>'apodo', '')),
     posicion = coalesce(d->>'posicion', ''), posicion2 = coalesce(d->>'posicion2', ''),
@@ -579,11 +606,11 @@ revoke all on function public.configurar(text, text), public.configurado(), publ
   public.votar(jsonb, uuid, jsonb, uuid), public.anotar(jsonb, uuid, boolean), public.vaciar_anotados(jsonb),
   public.guardar_proxima(jsonb, jsonb), public.ping(),
   public.papelera(jsonb), public.restaurar_partido(jsonb, uuid), public.cambiar_claves(jsonb, text, text),
-  public.registro(jsonb, boolean), public.respaldo(jsonb), public.guardar_alineacion(jsonb, jsonb) from public;
+  public.registro(jsonb, boolean), public.respaldo(jsonb), public.guardar_alineacion(jsonb, jsonb), public.crear_parche(jsonb, jsonb) from public;
 grant execute on function public.configurar(text, text), public.configurado(), public.entrar(jsonb),
   public.estado(jsonb), public.crear_jugador(jsonb, jsonb, text), public.editar_jugador(jsonb, uuid, jsonb, text),
   public.borrar_jugador(jsonb, uuid), public.guardar_partido(jsonb, uuid, jsonb), public.borrar_partido(jsonb, uuid),
   public.votar(jsonb, uuid, jsonb, uuid), public.anotar(jsonb, uuid, boolean), public.vaciar_anotados(jsonb),
   public.guardar_proxima(jsonb, jsonb), public.ping(),
   public.papelera(jsonb), public.restaurar_partido(jsonb, uuid), public.cambiar_claves(jsonb, text, text),
-  public.registro(jsonb, boolean), public.respaldo(jsonb), public.guardar_alineacion(jsonb, jsonb) to anon;
+  public.registro(jsonb, boolean), public.respaldo(jsonb), public.guardar_alineacion(jsonb, jsonb), public.crear_parche(jsonb, jsonb) to anon;

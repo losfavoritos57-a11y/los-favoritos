@@ -1,6 +1,6 @@
 import { CONFIG } from './config.js';
 
-const VERSION = 'v17'; // subirla junto con CACHE en sw.js y version.json en cada publicación
+const VERSION = 'v18'; // subirla junto con CACHE en sw.js y version.json en cada publicación
 const POS = { POR: 'Arquero', DEF: 'Defensa', MED: 'Volante', DEL: 'Delantero' };
 const POS_ICO = { POR: '🧤', DEF: '🛡️', MED: '⚙️', DEL: '⚽' };
 const POS_CORTO = { POR: 'Arq', DEF: 'Def', MED: 'Vol', DEL: 'Del' };
@@ -232,7 +232,8 @@ function renderBand() {
   if (!pr || !pr.fecha) { el.innerHTML = `<div class="lbl">Próxima pichanga</div><div class="val">Sin fecha todavía</div><div class="sub">${n ? `${n} anotados` : 'Pónganla en la pestaña Próxima'}</div>`; return; }
   el.innerHTML = `<div class="lbl">Próxima pichanga</div><div class="val">${esc(fmtFecha(pr.fecha, { weekday: 'long', day: 'numeric', month: 'long' }))}${pr.hora ? ' · ' + esc(pr.hora) : ''}</div><div class="sub">${esc(pr.lugar || 'Cancha por definir')} · <span class="num">${n}${pr.cupos ? '/' + esc(pr.cupos) : ''}</span> anotados</div>`;
 }
-const posTag = p => p.posicion ? `<span class="ptag">${esc(p.posicion)}</span>` : '';
+const posTag = p => (p.posicion ? `<span class="ptag">${esc(p.posicion)}</span>` : '') + parcheTag(p);
+const parcheTag = p => p.parche ? '<span class="ptag parche">PARCHE</span>' : '';
 const meTag = p => p.id === SES.jugador ? `<span class="me-tag">TÚ</span>` : '';
 const forma = f => `<span class="forma">${f.map(r => `<i class="${r}" title="${{ G: 'Ganó', E: 'Empató', P: 'Perdió' }[r]}">${r}</i>`).join('')}</span>`;
 
@@ -350,7 +351,7 @@ function vRankingPos(pos) {
     return (x.p.apodo || x.p.nombre).localeCompare(y.p.apodo || y.p.nombre);
   });
   const tabla = rk.length ? `<div class="tbl-wrap"><table><thead><tr><th>#</th><th class="l">Jugador</th><th title="Partidos jugados de ${POS[pos].toLowerCase()}">PJ</th><th title="Ganados-Empatados-Perdidos">G-E-P</th>${cols.map(c => `<th${c[2] ? ` title="${c[2]}"` : ''}>${c[0]}</th>`).join('')}<th title="Promedio de las notas en esos partidos">Nota</th></tr></thead>
-    <tbody>${rk.map(({ p, s }, i) => `<tr data-player="${esc(p.id)}" class="${i === 0 ? 'top1' : ''}"><td class="pos"><span>${i + 1}</span></td><td class="l"><span class="pname">${esc(p.apodo || p.nombre)}</span>${meTag(p)}</td><td class="num">${s.pj}</td><td class="num">${s.pg}-${s.pe}-${s.pp}</td>${cols.map(c => `<td class="num">${c[1](s)}</td>`).join('')}<td class="num${S.posSort === 'nota' ? ' hl' : ''}">${fmt1(s.nota)}</td></tr>`).join('')}</tbody></table></div>`
+    <tbody>${rk.map(({ p, s }, i) => `<tr data-player="${esc(p.id)}" class="${i === 0 ? 'top1' : ''}"><td class="pos"><span>${i + 1}</span></td><td class="l"><span class="pname">${esc(p.apodo || p.nombre)}</span>${parcheTag(p)}${meTag(p)}</td><td class="num">${s.pj}</td><td class="num">${s.pg}-${s.pe}-${s.pp}</td>${cols.map(c => `<td class="num">${c[1](s)}</td>`).join('')}<td class="num${S.posSort === 'nota' ? ' hl' : ''}">${fmt1(s.nota)}</td></tr>`).join('')}</tbody></table></div>`
     : `<div class="note empty"><h3>Nadie ha jugado de ${POS[pos].toLowerCase()} todavía</h3><p>Cuando carguen partidos marcando dónde jugó cada uno, aparece aquí.</p></div>`;
   return `${vistasRank()}<div class="sec-h"><h2>${POS_ICO[pos]} Mejores ${POS[pos].toLowerCase()}s</h2><div class="row"><button class="chip" data-psort="nota" aria-pressed="${S.posSort === 'nota'}">Por nota</button><button class="chip" data-psort="stat" aria-pressed="${S.posSort === 'stat'}">Por ${POS_STAT[pos].toLowerCase()}</button></div></div>${tabla}
     <p class="muted small">Cuenta solo los partidos jugados de ${POS[pos].toLowerCase()}: si alguien rota, cada puesto lleva su propia cuenta. Si en un partido no se anotó el puesto, se usa el de su ficha. La nota es el promedio que le pusieron en esos partidos.</p>`;
@@ -410,15 +411,18 @@ function vPartidos() {
 }
 function vPlantel() {
   const st = stats();
-  const head = `<div class="sec-h"><h2>Plantel <span class="muted num" style="font-size:20px">${S.players.length}</span></h2><button class="btn pri" data-act="${myPlayer() ? 'new-player' : 'nuevo-yo'}">${myPlayer() ? 'Agregar jugador' : 'Anotarme'}</button></div>`;
+  const head = `<div class="sec-h"><h2>Plantel <span class="muted num" style="font-size:20px">${S.players.filter(p => !p.parche).length}</span></h2><button class="btn pri" data-act="${myPlayer() ? 'new-player' : 'nuevo-yo'}">${myPlayer() ? 'Agregar jugador' : 'Anotarme'}</button></div>`;
   if (!S.players.length) return head + emptyPlayers();
   const dn = p => p.numero == null || p.numero === '' ? 99 : +p.numero;
   const ps = [...S.players].sort((a, b) => dn(a) - dn(b) || (a.apodo || a.nombre).localeCompare(b.apodo || b.nombre));
-  return head + `<div class="squad">${ps.map(p => { const s = st[p.id]; return `<button class="ficha" data-player="${esc(p.id)}">
+  const fichas = xs => `<div class="squad">${xs.map(p => { const s = st[p.id]; return `<button class="ficha${p.parche ? ' es-parche' : ''}" data-player="${esc(p.id)}">
     <span class="dorsal num">${esc(p.numero ?? '–')}</span>
     <span class="nm">${esc(p.apodo || p.nombre)}${meTag(p)}</span>
     <span class="ps">${esc(POS[p.posicion] || 'Sin posición')}${p.posicion2 ? ' / ' + esc(POS[p.posicion2]) : ''}</span>
     <span class="nota num"><span>${s.pj} PJ · ${s.g} G</span><span>Nota <b>${fmt1(s.nota)}</b></span></span></button>`; }).join('')}</div>`;
+  const parches = ps.filter(p => p.parche);
+  return head + fichas(ps.filter(p => !p.parche)) + `<div class="sec-h"><h2>Parches <span class="muted num" style="font-size:20px">${parches.length}</span></h2><button class="btn" data-act="new-parche">Agregar parche</button></div>
+    ${parches.length ? fichas(parches) : '<p class="muted small" style="margin:0">Los parches son jugadores esporádicos: juegan, reciben notas y tienen sus estadísticas, pero no entran a la app ni votan.</p>'}`;
 }
 function vProxima() {
   const pr = S.proxima || {}, voy = new Set(S.anotados.map(a => a.id)), cup = +pr.cupos || 0, n = voy.size;
@@ -554,7 +558,7 @@ function closeSheet() { $('#sheet').hidden = true; document.body.style.overflow 
 function necesitaJugador() { if (myPlayer() || esAdmin()) return true; quienEres(); return false; }
 
 function quienEres() {
-  const ps = [...S.players].sort((a, b) => (a.apodo || a.nombre).localeCompare(b.apodo || b.nombre));
+  const ps = S.players.filter(p => !p.parche).sort((a, b) => (a.apodo || a.nombre).localeCompare(b.apodo || b.nombre));
   openSheet(`<h2>¿Quién eres?</h2>`, `
     ${ps.length ? `<div class="lista">${ps.map(p => `<button class="it" data-elegir="${esc(p.id)}"><span><span class="pname">${esc(p.apodo || p.nombre)}</span>${posTag(p)}</span><span class="muted small">${esc(p.nombre !== (p.apodo || p.nombre) ? p.nombre : '')}</span></button>`).join('')}</div>` : '<p class="muted">Todavía no hay jugadores.</p>'}
     <button class="btn pri full" data-act="nuevo-yo">No estoy en la lista: anotarme</button>`, { type: 'quien' });
@@ -653,14 +657,15 @@ async function activarAdmin() {
   SES.admin = clave; guardarSes(); closeSheet(); toast('Modo administrador activado'); render();
 }
 
-function playerForm(p, paraMi) {
-  const me = myPlayer();
+function playerForm(p, paraMi, esParche) {
+  const me = myPlayer(); esParche = esParche || !!p?.parche;
   const opt = sel => `<option value="">—</option>` + Object.entries(POS).map(([k, l]) => `<option value="${k}" ${sel === k ? 'selected' : ''}>${l}</option>`).join('');
-  const nuevo = !p, puedePin = nuevo || esAdmin() || p.id === me?.id;
-  const titulo = p ? 'Editar jugador' : paraMi ? 'Anotarme' : 'Nuevo jugador';
-  const pinTxt = nuevo ? (paraMi ? 'Elige tu PIN de 4 números' : 'PIN de 4 números para él (díselo)') : 'Nuevo PIN (déjalo vacío para no cambiarlo)';
+  const nuevo = !p, puedePin = esParche ? !nuevo && esAdmin() : nuevo || esAdmin() || p.id === me?.id;
+  const titulo = esParche ? (nuevo ? 'Nuevo parche' : 'Editar parche') : p ? 'Editar jugador' : paraMi ? 'Anotarme' : 'Nuevo jugador';
+  const pinTxt = esParche ? 'PIN para pasarlo a jugador del grupo (déjalo vacío para que siga de parche)' : nuevo ? (paraMi ? 'Elige tu PIN de 4 números' : 'PIN de 4 números para él (díselo)') : 'Nuevo PIN (déjalo vacío para no cambiarlo)';
   openSheet(`<h2>${titulo}</h2>`, `
    <form id="f-player" class="stack">
+    ${esParche && nuevo ? '<p class="muted small" style="margin:0">Un parche juega, recibe notas y tiene estadísticas, pero no necesita PIN: no entra a la app ni vota.</p>' : ''}
     <div class="row"><div class="field"><label for="pf-nombre">Nombre</label><input id="pf-nombre" required maxlength="40" value="${esc(p?.nombre || '')}"></div>
       <div class="field"><label for="pf-apodo">Apodo (opcional)</label><input id="pf-apodo" maxlength="24" value="${esc(p?.apodo || '')}" placeholder="Así sale en la tabla"></div></div>
     <div class="row"><div class="field"><label for="pf-pos">Posición</label><select id="pf-pos">${opt(p?.posicion)}</select></div>
@@ -669,7 +674,7 @@ function playerForm(p, paraMi) {
       <div class="field"><label for="pf-pie">Pie hábil</label><select id="pf-pie">${['', 'Derecho', 'Izquierdo', 'Los dos'].map(v => `<option value="${v}" ${p?.pie === v ? 'selected' : ''}>${v || '—'}</option>`).join('')}</select></div></div>
     ${puedePin ? `<div class="field"><label for="pf-pin">${pinTxt}</label><input id="pf-pin" class="pin num" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="off" ${nuevo ? 'required' : ''}></div>` : ''}
     <div class="row spread">${p && esAdmin() ? (stats()[p.id].pj === 0 ? `<button type="button" class="btn warn" data-act="del-player" data-id="${esc(p.id)}">Eliminar</button>` : `<span class="hint">No se puede eliminar: ya jugó partidos.</span>`) : '<span></span>'}<button class="btn pri" type="submit">Guardar</button></div>
-   </form>`, { type: 'player', id: p?.id, paraMi: !!paraMi });
+   </form>`, { type: 'player', id: p?.id, paraMi: !!paraMi, parche: esParche });
 }
 async function savePlayer() {
   const v = id => $('#' + id)?.value.trim() || '';
@@ -677,8 +682,14 @@ async function savePlayer() {
   const d = { nombre, apodo: v('pf-apodo'), posicion: v('pf-pos'), posicion2: v('pf-pos2'), numero: v('pf-num'), pie: v('pf-pie') };
   const pin = v('pf-pin');
   if (pin && !/^\d{4}$/.test(pin)) { toast(ERRORES.pin_formato); return; }
+  if (sheetCtx.parche && !sheetCtx.id) {
+    const r = await accion('crear_parche', { d }, 'Parche agregado');
+    if (r) closeSheet();
+    return;
+  }
   if (sheetCtx.id) {
-    const r = await accion('editar_jugador', { p_id: sheetCtx.id, d, p_pin_nuevo: pin }, 'Jugador actualizado');
+    if (sheetCtx.parche && pin) d.parche = false; // el admin lo pasa a jugador del grupo
+    const r = await accion('editar_jugador', { p_id: sheetCtx.id, d, p_pin_nuevo: pin }, sheetCtx.parche && pin ? 'Ahora es jugador del grupo' : 'Jugador actualizado');
     if (r) { if (pin && sheetCtx.id === SES.jugador) { SES.pin = pin; guardarSes(); } closeSheet(); }
   } else {
     if (!pin) { toast(ERRORES.pin_formato); return; }
@@ -694,8 +705,8 @@ function playerSheet(id) {
     const inA = (m.equipoA || []).includes(id), gf = inA ? +m.golesA || 0 : +m.golesB || 0, gc = inA ? +m.golesB || 0 : +m.golesA || 0, r = gf > gc ? 'G' : gf < gc ? 'P' : 'E', np = notasPartido(m.id)[id];
     return `<div class="prow"><span class="nm">${forma([r])} ${esc(fmtFecha(m.fecha))} <span class="num">${gf}–${gc}</span> <span class="muted small">vs ${esc(rivalDe(m))}</span></span><span class="small muted num">${+m.goles?.[id] ? m.goles[id] + ' G ' : ''}${+m.asist?.[id] ? m.asist[id] + ' A ' : ''}${figuras(m).ids.includes(id) ? '· 🐱 Gato ' : ''}${np ? `· nota ${fmt1(np.avg)}` : ''}</span></div>`;
   }).join('');
-  const puedeEditar = esAdmin() || id === SES.jugador;
-  openSheet(`<h2>${esc(p.apodo || p.nombre)}</h2><div class="small" style="opacity:.85">${esc(p.nombre)}${p.numero != null ? ' · #' + esc(p.numero) : ''} · ${esc(POS[p.posicion] || 'Sin posición')}${p.posicion2 ? ' / ' + esc(POS[p.posicion2]) : ''}${p.pie ? ' · Pie ' + esc(p.pie.toLowerCase()) : ''}</div>`, `
+  const puedeEditar = esAdmin() || id === SES.jugador || (p.parche && !!myPlayer());
+  openSheet(`<h2>${esc(p.apodo || p.nombre)}${p.parche ? ' <span class="me-tag">PARCHE</span>' : ''}</h2><div class="small" style="opacity:.85">${esc(p.nombre)}${p.numero != null ? ' · #' + esc(p.numero) : ''} · ${esc(POS[p.posicion] || 'Sin posición')}${p.posicion2 ? ' / ' + esc(POS[p.posicion2]) : ''}${p.pie ? ' · Pie ' + esc(p.pie.toLowerCase()) : ''}</div>`, `
     <div class="statgrid num">
      <div><div class="v">${fmt1(s.nota)}</div><div class="k">Nota (${s.nc})</div></div>
      <div><div class="v">${s.pj}</div><div class="k">Jugados</div></div>
@@ -867,6 +878,7 @@ document.addEventListener('click', async e => {
     case 'quien': quienEres(); break;
     case 'nuevo-yo': if (registroOk()) playerForm(null, true); break;
     case 'new-player': if (registroOk()) playerForm(null, false); break;
+    case 'new-parche': if (necesitaJugador()) playerForm(null, false, true); break;
     case 'claves': clavesForm(); break;
     case 'registro': once(async () => { if (await accion('registro', { p_abierto: !S.registroAbierto }, S.registroAbierto ? 'Registro cerrado: solo tú puedes agregar jugadores' : 'Registro abierto')) cuentaSheet(); }); break;
     case 'respaldo': once(descargarRespaldo); break;
