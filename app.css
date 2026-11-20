@@ -181,9 +181,6 @@ td.hl{font-weight:700}
 .statgrid > div{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:8px 10px}
 .statgrid .v{font-family:var(--f-display);font-size:28px;font-weight:800;line-height:1}
 .statgrid .k{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
-.rate{display:grid;grid-template-columns:repeat(10,minmax(0,1fr));gap:3px;flex:1 1 280px}
-.rate button{height:32px;border-radius:6px;border:1px solid var(--line);background:var(--surface);font-size:13px;font-weight:700;color:var(--muted);padding:0}
-.rate button[aria-pressed="true"]{background:var(--amarilla);border-color:var(--amarilla);color:var(--on-amarilla)}
 .badge-n{font-family:var(--f-display);font-weight:800;font-size:18px;background:var(--amarilla);color:var(--on-amarilla);border-radius:6px;padding:0 7px}
 
 .toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 16px;border-radius:10px;font-weight:600;z-index:30;max-width:calc(100% - 32px);box-shadow:var(--shadow)}
@@ -242,3 +239,20 @@ td.hl{font-weight:700}
 .version{opacity:.75;font-size:.9em;white-space:nowrap}
 .ptag.parche{border-color:var(--amarilla);color:var(--ink)}
 .ficha.es-parche{border-style:dashed}
+
+/* votar paso a paso */
+.btn.grande{padding:14px 16px;font-size:17px}
+.voto-barra{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin-bottom:12px}
+.voto-barra i{display:block;height:100%;background:var(--amarilla);transition:width .2s}
+.voto-jugador{display:flex;gap:14px;align-items:center}
+.jug.carta.grande-carta{width:84px;min-height:108px;cursor:default}
+.grande-carta .c-nota{font-size:32px}
+.grande-carta .c-nom{max-width:78px;font-size:12px}
+.voto-nombre{font-family:var(--f-display);font-size:26px;text-transform:uppercase;line-height:1.1}
+.voto-pregunta{font-weight:700;margin:14px 0 8px}
+.voto-numeros{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+.vn{height:56px;border-radius:12px;border:2px solid var(--line);background:var(--surface);font-size:22px;font-weight:800;color:var(--ink)}
+.vn.baja{color:var(--roja)}
+.vn.alta{color:var(--gana)}
+.vn[aria-pressed="true"]{background:var(--amarilla);border-color:var(--amarilla);color:var(--on-amarilla)}
+.nota-res{font-family:var(--f-display);font-size:24px;font-weight:800}

@@ -1,6 +1,6 @@
 import { CONFIG } from './config.js';
 
-const VERSION = 'v18'; // subirla junto con CACHE en sw.js y version.json en cada publicación
+const VERSION = 'v19'; // subirla junto con CACHE en sw.js y version.json en cada publicación
 const POS = { POR: 'Arquero', DEF: 'Defensa', MED: 'Volante', DEL: 'Delantero' };
 const POS_ICO = { POR: '🧤', DEF: '🛡️', MED: '⚙️', DEL: '⚽' };
 const POS_CORTO = { POR: 'Arq', DEF: 'Def', MED: 'Vol', DEL: 'Del' };
@@ -310,7 +310,7 @@ function vAvisos() {
   if (me) {
     const h = new Date(Date.now() - 10 * 864e5), hace10 = h.getFullYear() + '-' + String(h.getMonth() + 1).padStart(2, '0') + '-' + String(h.getDate()).padStart(2, '0'), votados = new Set(S.misVotos.map(v => v.matchId));
     const p = [...S.matches].sort(byFecha).reverse().find(m => m.fecha >= hace10 && (m.equipoA || []).includes(me.id) && !votados.has(m.id) && (m.equipoA || []).length > 1);
-    if (p && !avisoVisto('voto-' + p.id)) html += `<div class="note cta aviso"><span>🗳️ <strong>Te falta poner notas</strong> del partido vs ${esc(rivalDe(p))} (${esc(fmtFecha(p.fecha))}). Tus notas eligen al gato.</span><span class="row"><button class="btn pri" data-match="${esc(p.id)}">Votar</button>${cerrar('voto-' + p.id)}</span></div>`;
+    if (p && !avisoVisto('voto-' + p.id)) html += `<div class="note cta aviso"><span>🗳️ <strong>Te falta poner notas</strong> del partido vs ${esc(rivalDe(p))} (${esc(fmtFecha(p.fecha))}). Tus notas eligen al gato.</span><span class="row"><button class="btn pri" data-votar="${esc(p.id)}">Votar</button>${cerrar('voto-' + p.id)}</span></div>`;
   }
   const mes = hoyMes(), dm = diasHasta(finDeMes(mes)), lider = gatoDe('M' + mes);
   if (dm <= 5 && lider?.ids.length && !avisoVisto('fin-' + mes)) html += `<div class="note cta aviso"><span>⏳ ${dm ? `<strong>Quedan ${dm} día${dm === 1 ? '' : 's'}</strong> para elegir al` : '<strong>¡Hoy se elige</strong> al'} Gato de ${MESES[+mes.slice(5) - 1]}. Va ganando ${esc(nombresFigura(lider.ids))} (${fmt1(lider.nota)}).</span>${cerrar('fin-' + mes)}</div>`;
@@ -792,23 +792,54 @@ function matchSheet(id) {
   const votables = [...(m.equipoA || []), ...(m.equipoB || [])].filter(pid => pById(pid) && pid !== me?.id);
   myRates = Object.fromEntries(Object.entries(mine?.notas || {}).filter(([pid]) => votables.includes(pid)));
   rateCtx = { mid: id, votables, existia: !!mine };
-  const rateRows = votables.map(pid => `<div class="prow"><span class="nm">${esc(pName(pid))}</span><span class="rate">${[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => `<button type="button" data-rate="${n}" data-id="${esc(pid)}" aria-pressed="${+myRates[pid] === n}">${n}</button>`).join('')}</span></div>`).join('');
+  const puestas = votables.filter(pid => myRates[pid]);
   openSheet(`<h2>${resultado(a, b)} <span class="num">${a} – ${b}</span></h2><div class="small" style="opacity:.85">vs ${esc(rivalDe(m))} · ${esc(fmtFecha(m.fecha, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }))}${m.lugar ? ' · ' + esc(m.lugar) : ''}</div>`, `
    <div class="teams">${team(m.equipoA || [])}</div>
    <p class="muted small" style="margin:0">Votaron ${nv}. Los votos son secretos: la nota de cada uno (el número amarillo) aparece cuando lo califican al menos ${S.minVotos}, así nadie puede adivinar qué puso otro. 🐱 El gato del partido es el de mejor nota.</p>
    ${me && S.errorJugador === 'bloqueado' ? `<div class="note small">Tu PIN quedó bloqueado unos minutos por intentos fallidos. Vuelve a abrir el partido más rato para votar.</div>`
     : me && !jugo(id, me.id) ? `<div class="note small">Solo ponen notas los que jugaron este partido.</div>`
-    : me ? `<div><div class="lbl2">Tus notas${mine ? ' (ya votaste, puedes cambiarlas)' : ''}</div><p class="muted small" style="margin:2px 0 4px">Del 1 al 10. Tu nota es una más en el promedio. A ti no te aparece: nadie se pone nota a sí mismo.</p>${rateRows || '<p class="muted">No hay a quién ponerle nota.</p>'}
-     <div class="row" style="justify-content:flex-end;margin-top:8px"><button class="btn pri" data-act="save-rates">Guardar mis notas</button></div></div>`
+    : me && !votables.length ? '<p class="muted">No hay a quién ponerle nota.</p>'
+    : me ? `<div class="votar-cta"><button class="btn pri full grande" data-act="votar">${puestas.length ? '✏️ Cambiar mis notas' : '🐱 Votar a mis compañeros'}</button>
+      <p class="muted small" style="margin:6px 0 0">${puestas.length ? `Ya pusiste nota a ${puestas.length} de ${votables.length}: ${puestas.map(pid => `${esc(pName(pid))} <b class="num">${myRates[pid]}</b>`).join(' · ')}` : `Son ${votables.length} compañeros, uno por uno. Toma menos de un minuto. El de mejor promedio es el gato.`}</p></div>`
     : `<div class="note cta small"><span>Para poner notas, primero elige tu jugador.</span><button class="btn pri" data-act="quien">Elegir</button></div>`}
    <div class="row"><button class="btn" data-act="edit-match" data-id="${esc(id)}">Editar partido</button></div>`, { type: 'mview', id });
+}
+// Votar paso a paso: un compañero por pantalla, con lo que hizo en el partido; al tocar la nota pasa al siguiente.
+let pasoVoto = 0, alResumen = false; // alResumen: se entró a corregir a uno desde el resumen
+function votoSheet(i = 0) {
+  const m = S.matches.find(x => x.id === rateCtx?.mid); if (!m) return;
+  const ids = rateCtx.votables, n = ids.length; pasoVoto = Math.max(0, Math.min(i, n));
+  const barra = `<div class="voto-barra"><i style="width:${Math.round(pasoVoto / n * 100)}%"></i></div>`;
+  if (pasoVoto === n) { // resumen
+    const listas = ids.filter(pid => myRates[pid]).length;
+    openSheet(`<h2>Tus notas</h2><div class="small" style="opacity:.85">vs ${esc(rivalDe(m))} · ${listas} de ${n} con nota</div>`, `${barra}
+      <div class="lista">${ids.map((pid, k) => `<button class="it" data-paso="${k}"><span class="pname">${esc(pName(pid))}</span><span class="nota-res num">${myRates[pid] || '–'}</span></button>`).join('')}</div>
+      <p class="muted small" style="margin:8px 0">Toca a alguien para cambiar su nota. Los que quedan con "–" no cuentan. Tus notas son secretas.</p>
+      <button class="btn pri full grande" data-act="save-rates">Guardar mis notas</button>`, { type: 'voto' });
+    return;
+  }
+  const pid = ids[pasoVoto], p = pById(pid) || {}, puesto = posDe(m, pid), g = +m.goles?.[pid] || 0, a = +m.asist?.[pid] || 0, cur = +myRates[pid] || 0;
+  const hizo = [g ? `⚽ ${g} gol${g > 1 ? 'es' : ''}` : '', a ? `🅰️ ${a} asistencia${a > 1 ? 's' : ''}` : '', puesto ? `${POS_ICO[puesto]} ${POS[puesto]}` : ''].filter(Boolean).join(' · ');
+  openSheet(`<h2>Votar · ${pasoVoto + 1} de ${n}</h2><div class="small" style="opacity:.85">vs ${esc(rivalDe(m))} · ${esc(fmtFecha(m.fecha))}</div>`, `${barra}
+    <div class="voto-jugador"><div class="jug carta grande-carta"><span class="c-nota num">${cur || '?'}</span><span class="c-pos">${puesto ? POS_CORTO[puesto] : ''}</span><span class="c-nom">${esc(pName(pid))}</span></div>
+      <div><div class="voto-nombre">${esc(p.apodo || p.nombre || '')}${p.parche ? ' <span class="ptag parche">PARCHE</span>' : ''}</div><div class="muted small">${hizo || 'Sin goles ni asistencias'}</div></div></div>
+    <p class="voto-pregunta">¿Qué nota le pones? <span class="muted small">${cur ? '(toca la misma para quitarla)' : ''}</span></p>
+    <div class="voto-numeros">${[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(k => `<button type="button" class="vn${k >= 8 ? ' alta' : k <= 4 ? ' baja' : ''}" data-nota="${k}" aria-pressed="${cur === k}">${k}</button>`).join('')}</div>
+    <div class="row spread" style="margin-top:10px"><button class="btn" data-paso="${pasoVoto - 1}" ${pasoVoto ? '' : 'disabled'}>← Atrás</button><button class="btn" data-paso="${alResumen ? n : pasoVoto + 1}">${alResumen ? 'Volver al resumen' : cur ? 'Siguiente →' : 'Saltar →'}</button></div>`, { type: 'voto' });
+}
+function abrirVoto() {
+  const me = myPlayer();
+  if (!me || !rateCtx || !rateCtx.votables.length || !jugo(rateCtx.mid, me.id) || S.errorJugador === 'bloqueado') return; // la hoja del partido ya explica por qué
+  alResumen = false;
+  const k = rateCtx.votables.findIndex(pid => !myRates[pid]);
+  votoSheet(k < 0 ? rateCtx.votables.length : k);
 }
 async function saveRates() {
   if (!myPlayer()) { quienEres(); return; }
   const notas = Object.fromEntries(Object.entries(myRates).filter(([pid, n]) => +n >= 1 && +n <= 10 && rateCtx.votables.includes(pid)));
   const vacio = !Object.keys(notas).length;
   if (vacio && !rateCtx.existia) { toast('Pon al menos una nota'); return; }
-  const r = await accion('votar', { p_match: rateCtx.mid, p_notas: notas }, vacio ? 'Borraste tus notas de este partido' : 'Notas guardadas');
+  const r = await accion('votar', { p_match: rateCtx.mid, p_notas: notas }, vacio ? 'Borraste tus notas de este partido' : 'Notas guardadas. ¡El de mejor promedio es el gato! 🐱');
   if (r) closeSheet();
 }
 
@@ -868,7 +899,14 @@ document.addEventListener('click', async e => {
     syncScore(); renderMatchForm(); return;
   }
   if (ds.st && draft) { keepInputs(); const o = draft[ds.st]; o[ds.id] = Math.max(0, (+o[ds.id] || 0) + (+ds.d)); if (ds.st === 'goles') syncScore(); renderMatchForm(); return; }
-  if (ds.rate) { const cur = +myRates[ds.id]; myRates[ds.id] = cur === +ds.rate ? 0 : +ds.rate; t.closest('.rate').querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.rate === myRates[ds.id]))); return; }
+  if (ds.nota && rateCtx) {
+    const pid = rateCtx.votables[pasoVoto];
+    if (+myRates[pid] === +ds.nota) { delete myRates[pid]; votoSheet(pasoVoto); return; } // tocar la misma nota la quita
+    myRates[pid] = +ds.nota;
+    votoSheet(alResumen || rateCtx.votables.every(x => myRates[x]) ? rateCtx.votables.length : pasoVoto + 1); return;
+  }
+  if (ds.votar) { matchSheet(ds.votar); if (rateCtx?.mid === ds.votar) abrirVoto(); return; }
+  if (ds.paso !== undefined && rateCtx) { alResumen = t.closest('.lista') ? true : alResumen && +ds.paso < rateCtx.votables.length; votoSheet(+ds.paso); return; }
   if (ds.player && !ds.act) { playerSheet(ds.player); return; }
   if (ds.match) { matchSheet(ds.match); return; }
   switch (ds.act) {
@@ -895,6 +933,7 @@ document.addEventListener('click', async e => {
       if (armedDel !== t) { arm(t, '¿Seguro? Toca otra vez'); return; }
       disarm(); once(async () => { if (await accion('borrar_partido', { p_id: draft.id }, 'Partido borrado. El administrador lo puede recuperar.')) closeSheet(); }); break;
     case 'save-rates': once(saveRates); break;
+    case 'votar': abrirVoto(); break;
     case 'edit-prox': if (necesitaJugador()) proxForm(); break;
     case 'armar': armar(); break;
     case 'usar-equipos': { const al = alin(); if (al && necesitaJugador()) matchForm(null, { A: [...titulares(al), ...suplentes(al)], pos: posAlin(al) }); } break;
